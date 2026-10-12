@@ -1,0 +1,9 @@
+pnpm-lock.yaml
+flake.lock
+src-tauri/target
+src-tauri/gen
+dist
+.cache
+.direnv
+.local-data
+node_modules
