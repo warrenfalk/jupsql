@@ -196,7 +196,28 @@ try {
   });
   await until('return document.querySelectorAll(".state-badge.stale").length === 3');
   await until('return !document.querySelectorAll(".run-button")[2].disabled');
-  await evaluate('document.querySelectorAll(".run-button")[2].click()');
+  // Ctrl+Enter must run the focused editor's cell without inserting a blank line.
+  const sqlBeforeShortcut = await evaluate(
+    `const editor = document.querySelector('[aria-label="by_customer SQL"]'); editor.focus(); return editor.innerText;`,
+  );
+  await request(`/session/${session}/actions`, 'POST', {
+    actions: [
+      {
+        type: 'key',
+        id: 'keyboard',
+        actions: [
+          { type: 'keyDown', value: '\uE009' },
+          { type: 'keyDown', value: '\uE007' },
+          { type: 'keyUp', value: '\uE007' },
+          { type: 'keyUp', value: '\uE009' },
+        ],
+      },
+    ],
+  });
+  assert.equal(
+    await evaluate(`return document.querySelector('[aria-label="by_customer SQL"]').innerText`),
+    sqlBeforeShortcut,
+  );
   await until(
     'return !document.querySelector(".run-progress") && document.querySelectorAll(".results tbody")[2].textContent.includes("999.00")',
   );
@@ -287,7 +308,7 @@ try {
     'Close flush check',
   );
   console.log(
-    `Native Tauri smoke passed (${connectionMode} connection): connect, run, shared snapshot, edit/stale propagation, current SQL composition, rename validation, refresh, persistence, logs, and save on close.`,
+    `Native Tauri smoke passed (${connectionMode} connection): connect, run, shared snapshot, edit/stale propagation, Ctrl+Enter, current SQL composition, rename validation, refresh, persistence, logs, and save on close.`,
   );
 } finally {
   if (session) await request(`/session/${session}`, 'DELETE').catch(() => {});

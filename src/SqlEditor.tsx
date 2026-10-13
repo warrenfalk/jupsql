@@ -1,4 +1,5 @@
 import { PostgreSQL, sql } from '@codemirror/lang-sql';
+import { Prec } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import CodeMirror from '@uiw/react-codemirror';
 import { useMemo } from 'react';
@@ -34,15 +35,18 @@ export function SqlEditor({
     () => [
       sql({ dialect: PostgreSQL, schema: { notebook: Object.fromEntries(names.map((name) => [name, []])) } }),
       editorTheme,
-      keymap.of([
-        {
-          key: 'Mod-Enter',
-          run: () => {
-            onRun();
-            return true;
+      // Override the default Mod-Enter binding, which inserts a blank line.
+      Prec.high(
+        keymap.of([
+          {
+            key: 'Mod-Enter',
+            run: () => {
+              onRun();
+              return true;
+            },
           },
-        },
-      ]),
+        ]),
+      ),
       EditorView.contentAttributes.of({ 'aria-label': label }),
     ],
     [names, onRun, label],
