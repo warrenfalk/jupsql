@@ -26,7 +26,7 @@ import { download } from './Results';
 import { useNotebook } from './useNotebook';
 
 export function App({ initial }: { initial: Bootstrap }) {
-  const state = useNotebook(initial.notebook ?? exampleNotebook());
+  const state = useNotebook(initial.notebook ?? exampleNotebook(), initial.connectionDefaults);
   const [connecting, setConnecting] = useState(false);
   const [showSession, setShowSession] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
@@ -115,8 +115,13 @@ export function App({ initial }: { initial: Bootstrap }) {
               <strong>PostgreSQL</strong>
               <span className={`connection-dot ${state.connection ? 'connected' : ''}`} />
             </div>
-            <p>{state.connection ?? 'No database connected'}</p>
-            <button disabled={!bridge.desktop || state.busy} onClick={() => setConnecting(true)}>
+            <p>
+              {state.autoConnecting ? 'Connecting from environment…' : (state.connection ?? 'No database connected')}
+            </p>
+            <button
+              disabled={!bridge.desktop || state.busy || state.autoConnecting}
+              onClick={() => setConnecting(true)}
+            >
               {state.connection ? 'Change connection' : 'Connect a database'}
               <ChevronRight size={13} />
             </button>
@@ -228,13 +233,17 @@ export function App({ initial }: { initial: Bootstrap }) {
               <div className="info-banner">
                 <Database size={17} />
                 <div>
-                  <strong>Your notebook is ready. Connect a database to run it.</strong>
+                  <strong>
+                    {state.autoConnecting
+                      ? 'Connecting to PostgreSQL…'
+                      : 'Your notebook is ready. Connect a database to run it.'}
+                  </strong>
                   <p>
                     The example queries work on any PostgreSQL database. For the local demo, run{' '}
                     <code>pnpm db:demo</code>.
                   </p>
                 </div>
-                <button className="button compact" onClick={() => setConnecting(true)}>
+                <button className="button compact" disabled={state.autoConnecting} onClick={() => setConnecting(true)}>
                   Connect
                 </button>
               </div>
@@ -357,7 +366,13 @@ export function App({ initial }: { initial: Bootstrap }) {
             .catch(state.fail);
         }}
       />
-      {connecting && <ConnectionDialog onClose={() => setConnecting(false)} onConnected={state.connected} />}
+      {connecting && (
+        <ConnectionDialog
+          initialValue={state.connectionInput}
+          onClose={() => setConnecting(false)}
+          onConnected={state.connected}
+        />
+      )}
       {showHelp && (
         <div className="modal-backdrop">
           <section className="modal guide" role="dialog" aria-modal="true" aria-labelledby="guide-title">

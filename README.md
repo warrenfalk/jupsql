@@ -7,19 +7,46 @@ A local Tauri desktop notebook for PostgreSQL. Write SQL, see results inline, an
 ```sh
 nix develop
 pnpm install --frozen-lockfile
-pnpm db:demo  # optional local PostgreSQL server
 pnpm dev
 ```
 
 Or run `direnv allow` once and use the same pnpm commands. The flake supplies Node 24, pnpm, Rust, PostgreSQL, and Linux WebKit/GTK dependencies. It selects a matching Mesa runtime so the app does not load an incompatible host graphics library.
 
-The connection dialog defaults to the local demo: `127.0.0.1:55432`, database `jupsql_demo`, username `jupsql`, no password, TLS off. The example notebook uses `VALUES`, so it also works on any PostgreSQL database without creating tables. The demo server listens only on loopback, uses a project-local cluster, and remains running until stopped:
+JupSQL automatically connects using a nonempty `DATABASE_URL` first. If it is absent or empty, it uses the individual PG variables with these defaults:
+
+```text
+PGUSER=postgres
+PGHOST=localhost
+PGPORT=5432
+PGPASSWORD=postgres
+PGDATABASE=<effective PGUSER>
+```
+
+With no variables set, this is equivalent to `postgres://postgres:postgres@localhost:5432/postgres`. An explicitly empty password stays empty. Saved profiles do not affect startup; manual connection changes last for the current session.
 
 ```sh
+DATABASE_URL='postgres://myuser:password@localhost:5432/mydb' pnpm dev
+# When DATABASE_URL is absent:
+PGHOST=localhost PGPORT=5432 PGDATABASE=mydb PGUSER=myuser pnpm dev
+# A socket directory or full .s.PGSQL.<port> socket path needs no PGPORT:
+PGHOST=/path/to/postgres/socket PGDATABASE=mydb PGUSER=myuser pnpm dev
+```
+
+`DATABASE_URL` accepts `postgres://` and `postgresql://`, percent-encoded credentials, and connection options supported by tokio-postgres (for example `sslmode=require` and `application_name`). It takes precedence over all PG variables, including when some URL fields are omitted; omitted fields use the defaults above. An invalid URL reports an error rather than falling back to another connection. URL options are retained for query connections; using the manual connection dialog instead applies its visible fields. The app's 12-second overall connection timeout and query limits still apply.
+
+For a `PGHOST` Unix socket, JupSQL detects the port from the socket filename and ignores `PGPORT`, including invalid values. A directory must contain exactly one PostgreSQL socket; if it contains several, specify the full socket path. A socket directory in `DATABASE_URL` uses the URL's port (or `5432`), so it can select a particular socket in a shared directory.
+
+An unsuccessful automatic connection shows an error and leaves the settings editable. Automatic TCP connections prefer TLS when the server supports it unless the URL specifies another mode; the manual dialog can require TLS with certificate verification. Credentials stay in memory. Raw URLs and passwords are excluded from saved files and session logs. Launch the app from the shell exporting the variables, or define them in `.env.local` and load it with direnv.
+
+The example notebook uses `VALUES`, so it works on any PostgreSQL database without creating tables. An optional local demo is available:
+
+```sh
+pnpm db:demo
+DATABASE_URL='postgres://jupsql:@127.0.0.1:55432/jupsql_demo?sslmode=disable' pnpm dev
 pg_ctl -D .cache/demo-postgres/data stop
 ```
 
-For another database, change the connection fields; enable TLS to require encryption and certificate verification. Passwords stay in the running process. Connection profiles remember only host, port, database, username, and TLS preference.
+The demo listens only on loopback at port `55432`, uses a project-local cluster, and remains running until stopped.
 
 `pnpm dev:web` is only a browser preview; database execution, filesystem persistence, and session logs require Tauri.
 
@@ -73,7 +100,7 @@ pnpm test:desktop  # Linux: actual Tauri/WebKit window and a disposable Postgres
 
 The PostgreSQL integration test creates and removes a disposable cluster. It checks SQL composition, mutation exclusion, server-enforced read-only behavior, preview bounds, concurrent-write snapshot consistency, explicit mutations, cancellation, and logging.
 
-The native desktop smoke test uses WebKitWebDriver, an isolated Xvfb display, and a separate notebook directory. It checks connecting, running, editing, transitive staleness, composing current SQL, reference errors, saving, and session logs. Its screenshot and session log are written under `.cache/validation/`.
+The native desktop smoke test uses WebKitWebDriver, an isolated Xvfb display, and separate notebook directories. It checks manual connections, automatic TCP/socket connections, recovery after automatic connection failures, password exclusion, running, editing, transitive staleness, composing current SQL, reference errors, saving, and session logs. Its screenshot and session log are written under `.cache/validation/`.
 
 Build a desktop executable with `pnpm desktop:build` (or add `--debug` for a faster local build). Installer packaging, schema browsing, multiple simultaneous notebooks/connections, charts, and references to cached results are outside this prototype. The SQL parser supports a broad PostgreSQL subset; unsupported syntax is reported rather than sent unchanged.
 

@@ -27,7 +27,7 @@ pub struct ActiveRun {
 
 #[derive(Default)]
 pub struct Database {
-    pub connection: Mutex<Option<ConnectionInput>>,
+    pub connection: Mutex<Option<Config>>,
     pub active: Mutex<Option<ActiveRun>>,
 }
 
@@ -54,7 +54,7 @@ fn tls() -> Result<MakeTlsConnector, String> {
         .map_err(|e| e.to_string())
 }
 
-pub async fn connect(input: &ConnectionInput) -> Result<Client, String> {
+pub fn configuration(input: &ConnectionInput) -> Config {
     let mut config = Config::new();
     config
         .host(&input.host)
@@ -62,13 +62,26 @@ pub async fn connect(input: &ConnectionInput) -> Result<Client, String> {
         .dbname(&input.database)
         .user(&input.user)
         .password(&input.password)
-        .connect_timeout(Duration::from_secs(10))
-        .application_name("JupSQL")
         .ssl_mode(if input.tls {
             SslMode::Require
         } else {
             SslMode::Disable
         });
+    config
+}
+
+pub async fn connect(input: &ConnectionInput) -> Result<Client, String> {
+    connect_config(&configuration(input)).await
+}
+
+async fn connect_config(input: &Config) -> Result<Client, String> {
+    let mut config = input.clone();
+    if config.get_connect_timeout().is_none() {
+        config.connect_timeout(Duration::from_secs(10));
+    }
+    if config.get_application_name().is_none() {
+        config.application_name("JupSQL");
+    }
     let (client, connection) =
         tokio::time::timeout(Duration::from_secs(12), config.connect(tls()?))
             .await
@@ -88,7 +101,11 @@ fn error_message(error: &tokio_postgres::Error) -> String {
 }
 
 pub async fn test_connection(input: &ConnectionInput) -> Result<String, String> {
-    let client = connect(input).await?;
+    test_config(&configuration(input)).await
+}
+
+pub async fn test_config(config: &Config) -> Result<String, String> {
+    let client = connect_config(config).await?;
     let row = client
         .query_one("SELECT current_database(), current_user", &[])
         .await
@@ -198,7 +215,7 @@ async fn execute_inner(
             .is_none_or(|c| c.kind == CellKind::Query);
     let started_at = now_ms();
     storage.record("run_started", json!({ "runId": run_id, "bulk": request.bulk, "readOnly": readonly, "targets": targets, "skipped": skipped, "notebook": request.notebook }))?;
-    let client = connect(&input).await?;
+    let client = connect_config(&input).await?;
     {
         let mut active = database.active.lock().map_err(|e| e.to_string())?;
         if let Some(active) = active.as_mut() {

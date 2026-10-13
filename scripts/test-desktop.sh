@@ -13,11 +13,16 @@ mkdir -p "$test_root/socket" .cache/validation
 initdb -D "$test_root/postgres" -U jupsql --auth-local=trust --auth-host=trust --no-locale --encoding=UTF8 > "$test_root/init.log"
 pg_ctl -D "$test_root/postgres" -l "$test_root/postgres.log" -o "-k '$test_root/socket' -h 127.0.0.1 -p 55434" -w start
 createdb -h "$test_root/socket" -p 55434 -U jupsql jupsql_demo
+psql -h "$test_root/socket" -p 55434 -U jupsql -d postgres -c "CREATE ROLE postgres LOGIN PASSWORD 'postgres'"
 export JUPSQL_TEST_PORT=55434
-export JUPSQL_DATA_DIR="$test_root/app"
+export JUPSQL_TEST_HOST="$test_root/socket"
 export TAURI_WEBVIEW_AUTOMATION=true
 export GDK_BACKEND=x11
-if ! xvfb-run -a -s '-screen 0 1440x1100x24' dbus-run-session -- node scripts/desktop-smoke.mjs 2> .cache/validation/desktop.log; then
-  cat .cache/validation/desktop.log
-  exit 1
-fi
+for mode in defaults tcp socket socket-file invalid-port rejected url url-invalid; do
+  export JUPSQL_TEST_CONNECTION_MODE="$mode"
+  export JUPSQL_DATA_DIR="$test_root/app-$mode"
+  if ! xvfb-run -a -s '-screen 0 1440x1100x24' dbus-run-session -- node scripts/desktop-smoke.mjs 2> ".cache/validation/desktop-$mode.log"; then
+    cat ".cache/validation/desktop-$mode.log"
+    exit 1
+  fi
+done

@@ -1,4 +1,5 @@
 pub mod compiler;
+pub mod connection;
 pub mod database;
 pub mod model;
 pub mod storage;
@@ -34,6 +35,16 @@ fn bootstrap(state: State<AppState>) -> Result<Bootstrap, String> {
 }
 
 #[tauri::command]
+fn connection_defaults(state: State<AppState>) -> Result<connection::ConnectionDefaults, String> {
+    let defaults = connection::environment_defaults(|name| std::env::var(name).ok());
+    if defaults.auto_connect {
+        let input = &defaults.input;
+        state.storage.record("connection_environment", json!({ "host": input.host, "port": input.port, "database": input.database, "user": input.user, "tls": input.tls, "error": defaults.error }))?;
+    }
+    Ok(defaults)
+}
+
+#[tauri::command]
 fn analyze_notebook(notebook: Notebook) -> Vec<Analysis> {
     compiler::analyze(&notebook)
 }
@@ -48,6 +59,27 @@ async fn connect_database(
     state: State<'_, AppState>,
     input: ConnectionInput,
 ) -> Result<String, String> {
+    let config =
+        connection::resolve(input.clone()).map(|resolved| database::configuration(&resolved));
+    establish_connection(&state, &input, config).await
+}
+
+#[tauri::command]
+async fn connect_environment(state: State<'_, AppState>) -> Result<String, String> {
+    let defaults = connection::environment_defaults(|name| std::env::var(name).ok());
+    let config = defaults.config.ok_or_else(|| {
+        defaults
+            .error
+            .unwrap_or_else(|| "Could not read connection settings.".into())
+    });
+    establish_connection(&state, &defaults.input, config).await
+}
+
+async fn establish_connection(
+    state: &AppState,
+    input: &ConnectionInput,
+    config: Result<tokio_postgres::Config, String>,
+) -> Result<String, String> {
     if state
         .database
         .active
@@ -57,14 +89,17 @@ async fn connect_database(
     {
         return Err("Wait for the current run before changing connections.".into());
     }
-    let result = database::test_connection(&input).await;
+    let result = match &config {
+        Ok(config) => database::test_config(config).await,
+        Err(error) => Err(error.clone()),
+    };
     state.storage.record("connection_attempt", json!({ "host": input.host, "port": input.port, "database": input.database, "user": input.user, "tls": input.tls, "error": result.as_ref().err() }))?;
     let label = result?;
     *state
         .database
         .connection
         .lock()
-        .map_err(|e| e.to_string())? = Some(input);
+        .map_err(|e| e.to_string())? = Some(config?);
     Ok(label)
 }
 
@@ -142,9 +177,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             bootstrap,
+            connection_defaults,
             analyze_notebook,
             save_notebook,
             connect_database,
+            connect_environment,
             run_cells,
             cancel_run,
             record_event,

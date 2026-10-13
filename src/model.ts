@@ -16,7 +16,14 @@ export type ConnectionInput = {
   password: string;
   tls: boolean;
 };
-export type Bootstrap = { notebook: Notebook | null; sessionId: string; logPath: string; dataDirectory: string };
+export type ConnectionDefaults = { input: ConnectionInput; autoConnect: boolean; error: string | null };
+export type Bootstrap = {
+  notebook: Notebook | null;
+  sessionId: string;
+  logPath: string;
+  dataDirectory: string;
+  connectionDefaults: ConnectionDefaults;
+};
 export type CellResult = {
   cellId: string;
   compiledSql: string;

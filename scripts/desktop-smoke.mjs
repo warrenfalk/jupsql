@@ -5,10 +5,50 @@ import { resolve } from 'node:path';
 
 const port = Number(process.env.JUPSQL_DRIVER_PORT ?? 4447);
 const base = `http://127.0.0.1:${port}`;
+const connectionMode = process.env.JUPSQL_TEST_CONNECTION_MODE ?? 'tcp';
+const connectionEnvironment = {
+  ...process.env,
+  DATABASE_URL: undefined,
+  PGHOST: undefined,
+  PGPORT: undefined,
+  PGDATABASE: undefined,
+  PGUSER: undefined,
+  PGPASSWORD: undefined,
+};
+if (connectionMode === 'defaults') {
+  connectionEnvironment.PGPORT = process.env.JUPSQL_TEST_PORT;
+} else {
+  Object.assign(connectionEnvironment, {
+    PGHOST: '127.0.0.1',
+    PGPORT: process.env.JUPSQL_TEST_PORT,
+    PGDATABASE: 'jupsql_demo',
+    PGUSER: 'jupsql',
+    PGPASSWORD: 'environment-password-never-save-or-log',
+  });
+  if (connectionMode.startsWith('socket')) {
+    connectionEnvironment.PGHOST = process.env.JUPSQL_TEST_HOST;
+    connectionEnvironment.PGPORT = 'ignored-for-sockets';
+    if (connectionMode === 'socket-file') {
+      connectionEnvironment.PGHOST += `/.s.PGSQL.${process.env.JUPSQL_TEST_PORT}`;
+    }
+  } else if (connectionMode === 'invalid-port') {
+    connectionEnvironment.PGPORT = 'invalid';
+  } else if (connectionMode === 'rejected') {
+    connectionEnvironment.PGDATABASE = 'nonexistent_database';
+  } else if (connectionMode === 'url') {
+    connectionEnvironment.DATABASE_URL = `postgresql://jupsql:url%40password-never-save-or-log@127.0.0.1:${process.env.JUPSQL_TEST_PORT}/jupsql_demo?sslmode=disable&application_name=url-client`;
+    connectionEnvironment.PGHOST = 'ignored.example';
+    connectionEnvironment.PGPORT = 'invalid';
+    connectionEnvironment.PGUSER = 'ignored';
+    connectionEnvironment.PGDATABASE = 'ignored';
+  } else if (connectionMode === 'url-invalid') {
+    connectionEnvironment.DATABASE_URL = 'postgres://jupsql:url-password-never-save-or-log@localhost:invalid/database';
+  }
+}
 await mkdir(`${process.env.JUPSQL_DATA_DIR}/runtime`, { recursive: true, mode: 0o700 });
 const driver = spawn('WebKitWebDriver', [`--port=${port}`, '--host=127.0.0.1'], {
   env: {
-    ...process.env,
+    ...connectionEnvironment,
     XDG_CONFIG_HOME: `${process.env.JUPSQL_DATA_DIR}/config`,
     XDG_CACHE_HOME: `${process.env.JUPSQL_DATA_DIR}/cache`,
     XDG_DATA_HOME: `${process.env.JUPSQL_DATA_DIR}/share`,
@@ -51,6 +91,11 @@ const invoke = (command, args) =>
     script: `const done = arguments[arguments.length - 1]; window.__TAURI_INTERNALS__.invoke(arguments[0], arguments[1]).then(value => done({value}), error => done({error:String(error)}));`,
     args: [command, args],
   });
+const setInput = (selector, value) =>
+  evaluate(
+    `const input = document.querySelector(arguments[0]); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, arguments[1]); input.dispatchEvent(new Event('input', {bubbles:true}));`,
+    [selector, value],
+  );
 
 try {
   for (let i = 0; i < 50; i += 1) {
@@ -67,15 +112,48 @@ try {
   session = created.sessionId;
   await until('return document.querySelectorAll(".cell-card").length === 3');
   assert.ok(await evaluate('return innerWidth > 800 && innerHeight > 400'));
-  await click('Connect a database');
-  await until('return !!document.querySelector("[role=dialog]")');
-  if (process.env.JUPSQL_TEST_PORT) {
-    await evaluate(
-      `const input = document.querySelector('input[type=number]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, arguments[0]); input.dispatchEvent(new Event('input', {bubbles:true}));`,
-      [process.env.JUPSQL_TEST_PORT],
+  if (['invalid-port', 'rejected', 'url-invalid'].includes(connectionMode)) {
+    await until('return document.body.innerText.includes("Automatic connection failed:")');
+    await click('Connect a database');
+    await until('return !!document.querySelector("[role=dialog]")');
+    if (process.env.JUPSQL_TEST_PORT) {
+      await setInput('input[type=number]', process.env.JUPSQL_TEST_PORT);
+    }
+    // Correct the detected settings through the ordinary manual connection form.
+    for (const [label, value] of [
+      ['Host', '127.0.0.1'],
+      ['Database', 'jupsql_demo'],
+      ['Username', 'jupsql'],
+    ]) {
+      await evaluate(
+        `const input = [...document.querySelectorAll('[role=dialog] label')].find(label => label.textContent.trim().startsWith(arguments[0])).querySelector('input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, arguments[1]); input.dispatchEvent(new Event('input', {bubbles:true}));`,
+        [label, value],
+      );
+    }
+    await click('Connect');
+  } else {
+    // A successful startup must connect without opening or submitting the dialog.
+    await until('return !!document.querySelector(".connection-dot.connected")');
+    assert.equal(await evaluate('return !!document.querySelector("[role=dialog]")'), false);
+    await click('Change connection');
+    await until('return !!document.querySelector("[role=dialog]")');
+    assert.equal(
+      await evaluate('return document.querySelector("[role=dialog] input").value'),
+      connectionMode === 'url' ? '127.0.0.1' : (connectionEnvironment.PGHOST ?? 'localhost'),
     );
+    assert.equal(
+      await evaluate('return document.querySelector("input[type=number]").disabled'),
+      connectionMode.startsWith('socket'),
+    );
+    assert.equal(await evaluate('return document.querySelector("[role=dialog] input").disabled'), false);
+    if (connectionMode === 'defaults') {
+      assert.equal(
+        await evaluate('return document.querySelector(".connection-card p").textContent'),
+        'postgres · postgres',
+      );
+    }
+    await evaluate(`document.querySelector('[aria-label="Close connection dialog"]').click()`);
   }
-  await click('Connect');
   await until(
     'return !document.querySelector("[role=dialog]") && ![...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Run all queries").disabled',
   );
@@ -146,6 +224,18 @@ try {
   assert.ok(bootstrap.value.notebook.cells[0].sql.includes('999.00'));
   const log = await invoke('read_session_log', {});
   const events = log.value.trim().split('\n').map(JSON.parse);
+  assert.ok(!log.value.includes('environment-password-never-save-or-log'));
+  assert.ok(!log.value.includes('url@password-never-save-or-log'));
+  assert.ok(!log.value.includes('url-password-never-save-or-log'));
+  if (connectionEnvironment.DATABASE_URL) {
+    assert.ok(!log.value.includes(connectionEnvironment.DATABASE_URL));
+  }
+  const profile = await evaluate('return localStorage.getItem("jupsql.connection")');
+  assert.ok(!profile?.includes('environment-password-never-save-or-log'));
+  assert.equal(events.filter((event) => event.event === 'connection_environment').length, 1);
+  if (['defaults', 'tcp', 'url'].includes(connectionMode) || connectionMode.startsWith('socket')) {
+    assert.equal(events.filter((event) => event.event === 'connection_attempt').length, 1);
+  }
   assert.ok(events.some((event) => event.event === 'cell_started'));
   assert.ok(events.some((event) => event.event === 'ui.cell_focused'));
   assert.ok(events.some((event) => event.event === 'notebook_saved'));
@@ -169,7 +259,7 @@ try {
     'Close flush check',
   );
   console.log(
-    'Native Tauri smoke passed: connect, run, shared snapshot, edit/stale propagation, current SQL composition, rename validation, refresh, persistence, logs, and save on close.',
+    `Native Tauri smoke passed (${connectionMode} connection): connect, run, shared snapshot, edit/stale propagation, current SQL composition, rename validation, refresh, persistence, logs, and save on close.`,
   );
 } finally {
   if (session) await request(`/session/${session}`, 'DELETE').catch(() => {});

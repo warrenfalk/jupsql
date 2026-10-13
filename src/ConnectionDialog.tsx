@@ -3,50 +3,25 @@ import { useState } from 'react';
 import * as bridge from './bridge';
 import type { ConnectionInput } from './model';
 
-function initialConnection(): ConnectionInput {
-  const fallback = {
-    host: '127.0.0.1',
-    port: 55432,
-    database: 'jupsql_demo',
-    user: 'jupsql',
-    password: '',
-    tls: false,
-  };
-  try {
-    const saved = localStorage.getItem('jupsql.connection');
-    if (!saved) return fallback;
-    const value = JSON.parse(saved) as Partial<ConnectionInput>;
-    return {
-      host: typeof value.host === 'string' ? value.host : fallback.host,
-      port: typeof value.port === 'number' ? value.port : fallback.port,
-      database: typeof value.database === 'string' ? value.database : fallback.database,
-      user: typeof value.user === 'string' ? value.user : fallback.user,
-      tls: typeof value.tls === 'boolean' ? value.tls : fallback.tls,
-      password: '',
-    };
-  } catch {
-    return fallback;
-  }
-}
-
 export function ConnectionDialog({
+  initialValue,
   onClose,
   onConnected,
 }: {
+  initialValue: ConnectionInput;
   onClose: () => void;
-  onConnected: (label: string) => void;
+  onConnected: (label: string, input: ConnectionInput) => void;
 }) {
-  const [value, setValue] = useState(initialConnection);
+  const [value, setValue] = useState(initialValue);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const socket = value.host.startsWith('/');
   async function submit() {
     setBusy(true);
     setError(null);
     try {
       const label = await bridge.connect(value);
-      const { password: _password, ...profile } = value;
-      localStorage.setItem('jupsql.connection', JSON.stringify(profile));
-      onConnected(label);
+      onConnected(label, value);
       onClose();
     } catch (error) {
       setError(String(error));
@@ -75,7 +50,7 @@ export function ConnectionDialog({
         >
           <fieldset disabled={busy} className="grid grid-cols-3 gap-4">
             <label className="col-span-2">
-              Host
+              Host or Unix socket path
               <input
                 autoFocus
                 required
@@ -86,7 +61,8 @@ export function ConnectionDialog({
             <label>
               Port
               <input
-                required
+                required={!socket}
+                disabled={socket}
                 type="number"
                 min="1"
                 max="65535"
@@ -119,11 +95,15 @@ export function ConnectionDialog({
             <label className="col-span-3 flex items-center gap-2 font-normal">
               <input
                 type="checkbox"
-                checked={value.tls}
+                checked={!socket && value.tls}
+                disabled={socket}
                 onChange={(e) => setValue({ ...value, tls: e.target.checked })}
               />
               Require TLS with certificate verification
             </label>
+            {socket && (
+              <p className="col-span-3 text-xs muted">The port is detected from the socket. TLS is not used.</p>
+            )}
           </fieldset>
           {error && (
             <p role="alert" className="error-box mt-4">

@@ -1,4 +1,5 @@
 use jupsql_lib::{
+    connection,
     database::{self, Database, RunRequest},
     model::{Cell, CellKind, ConnectionInput, Notebook},
     storage::Storage,
@@ -44,13 +45,72 @@ fn notebook(cells: Vec<Cell>) -> Notebook {
 #[ignore = "Starts a disposable PostgreSQL via scripts/test-postgres.sh"]
 async fn real_postgres_execution_contract() {
     let connection = input();
+    // An environment socket selects the nonstandard server port without PGPORT.
+    // A full socket path also works, even with a conflicting/invalid PGPORT.
+    for host in [
+        connection.host.clone(),
+        format!("{}/.s.PGSQL.55433", connection.host),
+    ] {
+        let defaults = connection::environment_defaults(|key| match key {
+            "PGHOST" => Some(host.clone()),
+            "PGPORT" => Some("ignored-for-sockets".into()),
+            "PGUSER" => Some("jupsql".into()),
+            "PGDATABASE" => Some("postgres".into()),
+            _ => None,
+        });
+        assert!(defaults.error.is_none());
+        let resolved = connection::resolve(defaults.input).unwrap();
+        assert_eq!(resolved.port, 55433);
+        assert_eq!(
+            database::test_connection(&resolved).await.unwrap(),
+            "postgres · jupsql"
+        );
+    }
     let setup = database::connect(&connection).await.unwrap();
     setup.batch_execute("CREATE TABLE orders (id int, amount numeric); INSERT INTO orders VALUES (1, 10), (2, 20); CREATE FUNCTION hidden_write() RETURNS int LANGUAGE plpgsql AS $$ BEGIN INSERT INTO orders VALUES (99, 99); RETURN 99; END $$;").await.unwrap();
     let database = Database::default();
-    *database.connection.lock().unwrap() = Some(connection.clone());
+    *database.connection.lock().unwrap() = Some(database::configuration(&connection));
     let directory =
         std::env::temp_dir().join(format!("jupsql-integration-{}", uuid::Uuid::new_v4()));
     let storage = Storage::new(directory.clone()).unwrap();
+
+    // DATABASE_URL must win over PG variables and retain options on every query connection.
+    let url = format!(
+        "postgres://jupsql:url%40password-never-log@{}:55433/postgres?sslmode=disable&application_name=url-client&options=-c%20search_path%3Dpg_catalog",
+        connection.host.replace('/', "%2F")
+    );
+    let from_url = connection::environment_defaults(|key| match key {
+        "DATABASE_URL" => Some(url.clone()),
+        "PGHOST" => Some("ignored.example".into()),
+        "PGPORT" => Some("invalid".into()),
+        _ => None,
+    });
+    assert!(from_url.error.is_none());
+    let url_database = Database::default();
+    *url_database.connection.lock().unwrap() = from_url.config;
+    let result = database::execute(
+        &url_database,
+        &storage,
+        RunRequest {
+            notebook: notebook(vec![cell(
+                "settings",
+                "SELECT current_setting('application_name'), current_setting('search_path')",
+                CellKind::Query,
+            )]),
+            cell_id: Some("settings".into()),
+            bulk: false,
+        },
+        |_| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        result.results[0].rows[0],
+        [Some("url-client".into()), Some("pg_catalog".into())]
+    );
+    let log = std::fs::read_to_string(&storage.log_path).unwrap();
+    assert!(!log.contains("url@password-never-log"));
+    assert!(!log.contains(&url));
 
     let book = notebook(vec![
         cell(

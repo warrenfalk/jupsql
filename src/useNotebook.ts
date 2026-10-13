@@ -1,20 +1,33 @@
 import { useEffect, useRef, useState } from 'react';
 import * as bridge from './bridge';
 import { acceptResults, affectedIds } from './model';
-import type { Analysis, Cell, DisplayResult, Notebook, Progress, RunResult } from './model';
+import type {
+  Analysis,
+  Cell,
+  ConnectionDefaults,
+  ConnectionInput,
+  DisplayResult,
+  Notebook,
+  Progress,
+  RunResult,
+} from './model';
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-export function useNotebook(initial: Notebook) {
+export function useNotebook(initial: Notebook, defaults: ConnectionDefaults) {
   const [notebook, setNotebook] = useState(initial);
   const [analyses, setAnalyses] = useState<Analysis[]>([]);
   const [analyzing, setAnalyzing] = useState(bridge.desktop);
   const [results, setResults] = useState<Record<string, DisplayResult>>({});
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<Progress | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(
+    defaults.error ? `Automatic connection failed: ${defaults.error}` : null,
+  );
   const [saveState, setSaveState] = useState('Saved locally');
   const [connection, setConnection] = useState<string | null>(null);
+  const [connectionInput, setConnectionInput] = useState(defaults.input);
+  const [autoConnecting, setAutoConnecting] = useState(defaults.autoConnect && !defaults.error);
   const [loggingError, setLoggingError] = useState<string | null>(null);
   const changedDuringRun = useRef(new Set<string>());
   const saveQueue = useRef(Promise.resolve());
@@ -22,6 +35,26 @@ export function useNotebook(initial: Notebook) {
   const latestNotebook = useRef(initial);
   const closing = useRef(false);
   const activeExecution = useRef<Promise<RunResult> | null>(null);
+  const automaticConnection = useRef<Promise<string> | null>(null);
+
+  useEffect(() => {
+    if (!bridge.desktop || !defaults.autoConnect || defaults.error) return;
+    let disposed = false;
+    automaticConnection.current ??= bridge.connectEnvironment();
+    void automaticConnection.current
+      .then((label) => {
+        if (!disposed) setConnection(label);
+      })
+      .catch((error: unknown) => {
+        if (!disposed) setNotice(`Automatic connection failed: ${message(error)}`);
+      })
+      .finally(() => {
+        if (!disposed) setAutoConnecting(false);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [defaults]);
 
   function log(event: string, data: Record<string, unknown>) {
     void bridge.record(event, data).catch((error: unknown) => setLoggingError(message(error)));
@@ -180,6 +213,8 @@ export function useNotebook(initial: Notebook) {
     notice,
     saveState,
     connection,
+    connectionInput,
+    autoConnecting,
     loggingError,
     editCell,
     change,
@@ -187,8 +222,10 @@ export function useNotebook(initial: Notebook) {
     log,
     setNotice,
     dismissNotice: () => setNotice(null),
-    connected: (label: string) => {
+    connected: (label: string, input: ConnectionInput) => {
       setConnection(label);
+      setConnectionInput(input);
+      setNotice(null);
       invalidateAll();
     },
     cancel: () => {
