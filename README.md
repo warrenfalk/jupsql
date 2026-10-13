@@ -62,7 +62,7 @@ GROUP BY customer;
 
 - References expand the **current SQL definition**, including edits that have not been executed. Results from previous runs are not inputs.
 - References work anywhere in the notebook, irrespective of visual order. Explicit aliases and ordinary SQL CTEs are supported. Missing references, cycles, duplicate names, and attempts to reference mutations produce errors.
-- Editing SQL, names, or cell types marks the affected cells and their transitive dependents stale. Notes and cell order do not change query results. A result that arrives after its definition was edited remains stale.
+- Editing SQL or cell types marks the affected cells and their transitive dependents stale. Renaming a cell marks its dependents stale but preserves its own result when the compiled SQL is unchanged; renaming does not clear an already stale result. Notes and cell order do not change query results. A result that arrives after its executable definition was edited remains stale.
 - **Run** executes one cell. Ctrl/Cmd+Enter runs the focused cell.
 - **Rerun dependents** refreshes the selected source cell and all its downstream query cells. **Run all queries** refreshes every query cell. Both skip mutation cells.
 - Every bulk run uses one `REPEATABLE READ READ ONLY` transaction and a fixed copy of the submitted notebook. Each cell runs as its own composed statement; upstream SQL can execute again in each dependent statement. Savepoints let independent cells finish even when another cell fails.

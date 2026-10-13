@@ -202,17 +202,45 @@ try {
   );
   assert.equal(await evaluate('return document.querySelectorAll(".state-badge.stale").length'), 2);
 
-  // Renaming a referenced definition should expose an error, not query a real table.
+  // Renaming must not clear an existing stale state.
   await evaluate(
     `const input = document.querySelector('[aria-label="Cell 1 name"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'renamed'); input.dispatchEvent(new Event('input', {bubbles:true}));`,
   );
   await until('return document.querySelectorAll(".validation-error").length === 2');
+  assert.equal(
+    await evaluate('return !!document.querySelector(".cell-card").querySelector(".state-badge.stale")'),
+    true,
+  );
   await evaluate(
     `const input = document.querySelector('[aria-label="Cell 1 name"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'orders'); input.dispatchEvent(new Event('input', {bubbles:true}));`,
   );
   await until(
     'return document.querySelectorAll(".validation-error").length === 0 && !document.querySelectorAll(".run-button")[0].disabled',
   );
+  await click('Rerun dependents');
+  await until(
+    'return !document.querySelector(".run-progress") && document.querySelectorAll(".state-badge.stale").length === 0',
+  );
+
+  // A fresh result survives a rename, while references to the old name become stale/invalid.
+  const firstResult = await evaluate('return document.querySelector(".results tbody").innerText');
+  await setInput('[aria-label="Cell 1 name"]', 'renamed');
+  await until('return document.querySelectorAll(".validation-error").length === 2');
+  assert.equal(
+    await evaluate('return !!document.querySelector(".cell-card").querySelector(".state-badge.stale")'),
+    false,
+  );
+  assert.equal(await evaluate('return document.querySelectorAll(".state-badge.stale").length'), 2);
+  assert.equal(await evaluate('return document.querySelector(".results tbody").innerText'), firstResult);
+  await setInput('[aria-label="Cell 1 name"]', 'orders');
+  await until(
+    'return document.querySelectorAll(".validation-error").length === 0 && !document.querySelectorAll(".run-button")[0].disabled',
+  );
+  assert.equal(
+    await evaluate('return !!document.querySelector(".cell-card").querySelector(".state-badge.stale")'),
+    false,
+  );
+  assert.equal(await evaluate('return document.querySelectorAll(".state-badge.stale").length'), 2);
   await click('Rerun dependents');
   await until(
     'return !document.querySelector(".run-progress") && document.querySelectorAll(".state-badge.stale").length === 0',

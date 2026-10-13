@@ -160,11 +160,13 @@ export function useNotebook(initial: Notebook, defaults: ConnectionDefaults) {
 
   function editCell(cell: Cell) {
     const previous = notebook.cells.find((item) => item.id === cell.id);
-    const sqlChanged = previous?.sql !== cell.sql || previous.name !== cell.name || previous.kind !== cell.kind;
-    change(
-      { ...notebook, cells: notebook.cells.map((item) => (item.id === cell.id ? cell : item)) },
-      sqlChanged ? affectedIds(notebook, analyses, cell.id) : new Set(),
-    );
+    const executionChanged = previous?.sql !== cell.sql || previous?.kind !== cell.kind;
+    const changed =
+      executionChanged || previous?.name !== cell.name ? affectedIds(notebook, analyses, cell.id) : new Set<string>();
+    // Renaming changes references to this cell, not its own SQL or an existing stale state.
+    // The result view also checks compiled SQL, so changed/invalid expansions still become stale.
+    if (!executionChanged) changed.delete(cell.id);
+    change({ ...notebook, cells: notebook.cells.map((item) => (item.id === cell.id ? cell : item)) }, changed);
   }
 
   function invalidateAll() {
