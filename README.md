@@ -2,6 +2,34 @@
 
 A local Tauri desktop notebook for PostgreSQL. Write SQL, see results inline, and reuse named query definitions in other cells.
 
+## Install with Nix
+
+On Linux, build the standalone package with `nix build` or launch it with `nix run`.
+The package provides `bin/jupsql` and a desktop-menu entry, with the frontend and
+GTK/WebKit runtime included.
+
+For a NixOS flake, add JupSQL as an input and select its default package:
+
+```nix
+inputs.jupsql.url = "git+https://github.com/warrenfalk/jupsql.git?ref=main&shallow=1";
+
+# In a module receiving inputs through specialArgs:
+environment.systemPackages = [ inputs.jupsql.packages.${pkgs.stdenv.hostPlatform.system}.default ];
+```
+
+Keep JupSQL's own Nixpkgs pin so its Node, pnpm, Rust, and native libraries stay
+aligned. After rebuilding and activating the system, run `jupsql` from a terminal.
+It reads `DATABASE_URL` and the PG variables from that terminal's environment.
+Outside the development shell, notebooks and logs use the OS application-data
+directory unless `JUPSQL_DATA_DIR` is set.
+
+To run the native integration checks against the installed package:
+
+```sh
+nix build
+nix develop -c env JUPSQL_TEST_BINARY="$PWD/result/bin/jupsql" pnpm test:desktop
+```
+
 ## Run
 
 ```sh

@@ -107,7 +107,13 @@ try {
     }
   }
   const created = await request('/session', 'POST', {
-    capabilities: { alwaysMatch: { 'webkitgtk:browserOptions': { binary: resolve('src-tauri/target/debug/jupsql') } } },
+    capabilities: {
+      alwaysMatch: {
+        'webkitgtk:browserOptions': {
+          binary: resolve(process.env.JUPSQL_TEST_BINARY ?? 'src-tauri/target/debug/jupsql'),
+        },
+      },
+    },
   });
   session = created.sessionId;
   await until('return document.querySelectorAll(".cell-card").length === 3');

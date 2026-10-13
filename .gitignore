@@ -6,3 +6,5 @@ src-tauri/gen/
 .cache/
 .local-data/
 .env.local
+result
+result-*

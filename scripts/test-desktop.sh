@@ -2,7 +2,15 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-pnpm desktop:build --debug
+if [[ -z "${JUPSQL_TEST_BINARY:-}" ]]; then
+  pnpm desktop:build --debug
+else
+  export JUPSQL_TEST_BINARY="$(realpath "$JUPSQL_TEST_BINARY")"
+  test -x "$JUPSQL_TEST_BINARY"
+  # A packaged application must supply its runtime without development settings.
+  unset GIO_MODULE_DIR GIO_EXTRA_MODULES GI_TYPELIB_PATH GDK_PIXBUF_MODULE_FILE
+  unset LD_LIBRARY_PATH __EGL_VENDOR_LIBRARY_FILENAMES GBM_BACKENDS_PATH LIBGL_DRIVERS_PATH
+fi
 test_root="$(mktemp -d /tmp/jupsql-desktop.XXXXXX)"
 cleanup() {
   pg_ctl -D "$test_root/postgres" -m immediate -w stop > /dev/null 2>&1 || true
