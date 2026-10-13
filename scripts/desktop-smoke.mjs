@@ -238,10 +238,38 @@ try {
   await until(
     'return document.querySelectorAll(".validation-error").length === 0 && !document.querySelectorAll(".run-button")[0].disabled',
   );
-  await click('Rerun dependents');
+  // Ctrl+Shift+Enter refreshes the focused query and its dependents in one snapshot.
+  const sqlBeforeRefresh = await evaluate(
+    `const editor = document.querySelector('[aria-label="orders SQL"]'); editor.focus(); return editor.innerText;`,
+  );
+  await request(`/session/${session}/actions`, 'POST', {
+    actions: [
+      {
+        type: 'key',
+        id: 'keyboard',
+        actions: [
+          { type: 'keyDown', value: '\uE009' },
+          { type: 'keyDown', value: '\uE008' },
+          { type: 'keyDown', value: '\uE007' },
+          { type: 'keyUp', value: '\uE007' },
+          { type: 'keyUp', value: '\uE008' },
+          { type: 'keyUp', value: '\uE009' },
+        ],
+      },
+    ],
+  });
+  assert.equal(
+    await evaluate(`return document.querySelector('[aria-label="orders SQL"]').innerText`),
+    sqlBeforeRefresh,
+  );
   await until(
     'return !document.querySelector(".run-progress") && document.querySelectorAll(".state-badge.stale").length === 0',
   );
+  const refreshedSnapshots = await evaluate(
+    'return [...document.querySelectorAll(".result-bar time")].map(t => t.title.split("Snapshot ")[1])',
+  );
+  assert.equal(new Set(refreshedSnapshots).size, 1);
+  assert.ok(await evaluate('return [...document.querySelectorAll(".results tbody")].every(t => t.rows.length === 1)'));
 
   // A fresh result survives a rename, while references to the old name become stale/invalid.
   const firstResult = await evaluate('return document.querySelector(".results tbody").innerText');
@@ -308,7 +336,7 @@ try {
     'Close flush check',
   );
   console.log(
-    `Native Tauri smoke passed (${connectionMode} connection): connect, run, shared snapshot, edit/stale propagation, Ctrl+Enter, current SQL composition, rename validation, refresh, persistence, logs, and save on close.`,
+    `Native Tauri smoke passed (${connectionMode} connection): connect, run, shared snapshot, edit/stale propagation, Ctrl+Enter, Ctrl+Shift+Enter, current SQL composition, rename validation, refresh, persistence, logs, and save on close.`,
   );
 } finally {
   if (session) await request(`/session/${session}`, 'DELETE').catch(() => {});

@@ -95,7 +95,7 @@ export function CellCard({
           <span className="action-divider" />
           <button
             className="button compact"
-            title="Refresh this cell and its downstream queries in one snapshot; mutations are skipped"
+            title="Refresh this cell and its downstream queries in one snapshot (Ctrl/Cmd+Shift+Enter); mutations are skipped"
             disabled={!canRun || cell.kind !== 'query'}
             onClick={onRefresh}
           >
@@ -126,6 +126,9 @@ export function CellCard({
             value={cell.sql}
             onChange={(sql) => onChange({ ...cell, sql })}
             onRun={onRun}
+            onRefresh={() => {
+              if (canRun && cell.kind === 'query') onRefresh();
+            }}
             names={names}
             label={`${cell.name} SQL`}
           />

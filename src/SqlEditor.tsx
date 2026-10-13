@@ -22,12 +22,14 @@ export function SqlEditor({
   value,
   onChange,
   onRun,
+  onRefresh,
   names,
   label,
 }: {
   value: string;
   onChange: (value: string) => void;
   onRun: () => void;
+  onRefresh: () => void;
   names: string[];
   label: string;
 }) {
@@ -45,11 +47,18 @@ export function SqlEditor({
               return true;
             },
           },
+          {
+            key: 'Mod-Shift-Enter',
+            run: () => {
+              onRefresh();
+              return true;
+            },
+          },
         ]),
       ),
       EditorView.contentAttributes.of({ 'aria-label': label }),
     ],
-    [names, onRun, label],
+    [names, onRun, onRefresh, label],
   );
   return (
     <CodeMirror
