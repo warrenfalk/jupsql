@@ -66,15 +66,7 @@ For a `PGHOST` Unix socket, JupSQL detects the port from the socket filename and
 
 An unsuccessful automatic connection shows an error and leaves the settings editable. Automatic TCP connections prefer TLS when the server supports it unless the URL specifies another mode; the manual dialog can require TLS with certificate verification. Credentials stay in memory. Raw URLs and passwords are excluded from saved files and session logs. Launch the app from the shell exporting the variables, or define them in `.env.local` and load it with direnv.
 
-The example notebook uses `VALUES`, so it works on any PostgreSQL database without creating tables. An optional local demo is available:
-
-```sh
-pnpm db:demo
-DATABASE_URL='postgres://jupsql:@127.0.0.1:55432/jupsql_demo?sslmode=disable' pnpm dev
-pg_ctl -D .cache/demo-postgres/data stop
-```
-
-The demo listens only on loopback at port `55432`, uses a project-local cluster, and remains running until stopped.
+New notebooks start with one empty query cell. New cells have empty SQL and notes.
 
 `pnpm dev:web` is only a browser preview; database execution, filesystem persistence, and session logs require Tauri.
 

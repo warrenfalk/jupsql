@@ -151,7 +151,7 @@ export function CellCard({
               {expanded ? 'Hide expanded SQL' : 'Expanded SQL'}
             </button>
           </div>
-          {analysis?.error && (
+          {cell.sql.trim() && analysis?.error && (
             <p className="validation-error" role="alert">
               {analysis.error}
             </p>

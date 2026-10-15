@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { acceptResults, affectedIds, exampleNotebook, parseNotebook } from './model';
+import { acceptResults, affectedIds, newCell, newNotebook, parseNotebook } from './model';
 import type { Analysis, RunResult } from './model';
 
 describe('notebook state', () => {
   it('invalidates every dependent and leaves unrelated cells alone', () => {
-    const notebook = exampleNotebook();
+    const notebook = { ...newNotebook(), cells: [newCell(1), newCell(2), newCell(3)] };
     const [a, b, c] = notebook.cells;
     if (!a || !b || !c) throw new Error('Invalid fixture');
     const analyses: Analysis[] = [
@@ -43,7 +43,7 @@ describe('notebook state', () => {
   });
 
   it('round trips notebooks and rejects malformed or duplicate identities', () => {
-    const notebook = exampleNotebook();
+    const notebook = newNotebook();
     expect(parseNotebook(JSON.stringify(notebook))).toEqual(notebook);
     expect(() => parseNotebook('{"version":2}')).toThrow();
     expect(() => parseNotebook(JSON.stringify({ ...notebook, cells: [notebook.cells[0], notebook.cells[0]] }))).toThrow(

@@ -16,7 +16,6 @@
     "test": "vitest run",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "db:demo": "bash scripts/demo-db.sh",
     "test:postgres": "bash scripts/test-postgres.sh",
     "test:desktop": "bash scripts/test-desktop.sh"
   },

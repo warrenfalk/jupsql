@@ -116,6 +116,27 @@ try {
     },
   });
   session = created.sessionId;
+  await until('return document.querySelectorAll(".cell-card").length === 1');
+  assert.equal(
+    await evaluate(`return document.querySelector('[aria-label="Notebook title"]').value`),
+    'Untitled notebook',
+  );
+  assert.equal(await evaluate(`return document.querySelector('[aria-label="query_1 SQL"]').innerText.trim()`), '');
+  assert.equal(await evaluate(`return document.querySelector('[aria-label="query_1 notes"]').value`), '');
+  assert.equal(await evaluate('return document.body.innerText.includes("Notebook guide")'), false);
+  await click('Add query');
+  await until('return document.querySelectorAll(".cell-card").length === 2');
+  assert.equal(await evaluate(`return document.querySelector('[aria-label="query_2 SQL"]').innerText.trim()`), '');
+  assert.equal(await evaluate(`return document.querySelector('[aria-label="query_2 notes"]').value`), '');
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/notebook.json', import.meta.url), 'utf8'));
+  await evaluate(
+    `const input = document.querySelector('[aria-label="Notebook file"]');
+     const transfer = new DataTransfer();
+     transfer.items.add(new File([JSON.stringify(arguments[0])], 'test.jupsql.json', {type: 'application/json'}));
+     input.files = transfer.files;
+     input.dispatchEvent(new Event('change', {bubbles: true}));`,
+    [fixture],
+  );
   await until('return document.querySelectorAll(".cell-card").length === 3');
   assert.ok(await evaluate('return innerWidth > 800 && innerHeight > 400'));
   if (['invalid-port', 'rejected', 'url-invalid'].includes(connectionMode)) {
@@ -322,6 +343,7 @@ try {
   assert.ok(events.some((event) => event.event === 'cell_started'));
   assert.ok(events.some((event) => event.event === 'ui.cell_focused'));
   assert.ok(events.some((event) => event.event === 'notebook_saved'));
+  assert.ok(events.some((event) => event.event === 'ui.notebook_imported'));
 
   await mkdir('.cache/validation', { recursive: true });
   const screenshot = await request(`/session/${session}/screenshot`);
@@ -342,7 +364,7 @@ try {
     'Close flush check',
   );
   console.log(
-    `Native Tauri smoke passed (${connectionMode} connection): connect, run, shared snapshot, edit/stale propagation, Ctrl+Enter, Ctrl+Shift+Enter, current SQL composition, rename validation, refresh, persistence, logs, and save on close.`,
+    `Native Tauri smoke passed (${connectionMode} connection): blank startup and new cells, import, connect, run, shared snapshot, edit/stale propagation, Ctrl+Enter, Ctrl+Shift+Enter, current SQL composition, rename validation, refresh, persistence, logs, and save on close.`,
   );
 } finally {
   if (session) await request(`/session/${session}`, 'DELETE').catch(() => {});

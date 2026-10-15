@@ -79,14 +79,6 @@ kbd {
   background: #167969;
   border-radius: 11px;
 }
-.prototype-tag {
-  display: block;
-  font-size: 8px;
-  font-weight: 600;
-  letter-spacing: 1.5px;
-  color: #8a939f;
-  margin-top: 1px;
-}
 .sidebar-section-label {
   font-size: 10px;
   letter-spacing: 1.3px;
@@ -226,14 +218,6 @@ kbd {
 .sidebar-link .live-dot {
   margin-left: auto;
 }
-.local-label {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: #a1a9b5;
-  font-size: 10px;
-  margin: 20px 10px 0;
-}
 .main-panel {
   margin-left: 238px;
   flex: 1;
@@ -291,11 +275,6 @@ kbd {
   border: 0;
   padding: 0;
   color: #273247;
-}
-.notebook-subtitle {
-  margin: 9px 0 0;
-  color: #919baa;
-  font-size: 12px;
 }
 .sql-emblem {
   width: 53px;
@@ -757,25 +736,8 @@ tbody tr:hover {
   font-size: 11px;
   overflow-wrap: anywhere;
 }
-.guide {
-  width: 600px;
-}
-.guide h2,
 .session-modal h2 {
   margin-top: 0;
-}
-.guide p {
-  margin: 18px 0;
-  font-size: 12px;
-  color: #7b8899;
-  line-height: 1.8;
-}
-.guide pre {
-  padding: 15px;
-  background: #eff4f2;
-  color: #53806c;
-  border-radius: 6px;
-  font-size: 12px;
 }
 .session-modal {
   width: 790px;

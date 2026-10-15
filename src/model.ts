@@ -47,36 +47,14 @@ export type DisplayResult = CellResult & { runId: string; snapshot: string; star
 export type Progress = { runId: string; cellId: string; index: number; total: number };
 
 export function newCell(index: number): Cell {
-  return { id: crypto.randomUUID(), name: `query_${index}`, kind: 'query', sql: 'SELECT 1 AS value;', notes: '' };
+  return { id: crypto.randomUUID(), name: `query_${index}`, kind: 'query', sql: '', notes: '' };
 }
 
-export function exampleNotebook(): Notebook {
+export function newNotebook(): Notebook {
   return {
     version: 1,
-    title: 'An afternoon with SQL',
-    cells: [
-      {
-        id: crypto.randomUUID(),
-        name: 'orders',
-        kind: 'query',
-        notes: 'Start with a few orders. This self-contained example works with any PostgreSQL database.',
-        sql: "SELECT *\nFROM (VALUES\n  (101, 'Maya', 'paid', 120.00),\n  (102, 'Jonah', 'pending', 85.50),\n  (103, 'Maya', 'paid', 240.00),\n  (104, 'Elena', 'paid', 64.00),\n  (105, 'Jonah', 'refunded', 39.00)\n) AS orders(id, customer, status, amount);",
-      },
-      {
-        id: crypto.randomUUID(),
-        name: 'paid_orders',
-        kind: 'query',
-        notes: 'Reference the current SQL in another cell. Try changing the filter and watch the summary become stale.',
-        sql: "SELECT *\nFROM notebook.orders\nWHERE status = 'paid';",
-      },
-      {
-        id: crypto.randomUUID(),
-        name: 'by_customer',
-        kind: 'query',
-        notes: 'Build on the filtered query to explore another angle.',
-        sql: 'SELECT customer,\n       COUNT(*) AS order_count,\n       SUM(amount) AS total\nFROM notebook.paid_orders\nGROUP BY customer\nORDER BY total DESC;',
-      },
-    ],
+    title: 'Untitled notebook',
+    cells: [newCell(1)],
   };
 }
 

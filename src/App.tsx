@@ -3,7 +3,6 @@ import {
   Braces,
   Check,
   ChevronRight,
-  CircleHelp,
   Database,
   Download,
   FileInput,
@@ -11,7 +10,6 @@ import {
   History,
   LoaderCircle,
   Plus,
-  Radio,
   Square,
   Terminal,
   X,
@@ -20,16 +18,15 @@ import { useRef, useState } from 'react';
 import * as bridge from './bridge';
 import { CellCard } from './CellCard';
 import { ConnectionDialog } from './ConnectionDialog';
-import { affectedIds, exampleNotebook, newCell, parseNotebook } from './model';
+import { affectedIds, newCell, newNotebook, parseNotebook } from './model';
 import type { Bootstrap, Cell } from './model';
 import { download } from './Results';
 import { useNotebook } from './useNotebook';
 
 export function App({ initial }: { initial: Bootstrap }) {
-  const state = useNotebook(initial.notebook ?? exampleNotebook(), initial.connectionDefaults);
+  const state = useNotebook(initial.notebook ?? newNotebook(), initial.connectionDefaults);
   const [connecting, setConnecting] = useState(false);
   const [showSession, setShowSession] = useState(false);
-  const [showHelp, setShowHelp] = useState(false);
   const [sessionText, setSessionText] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
   const [deleted, setDeleted] = useState<{ cell: Cell; index: number } | null>(null);
@@ -68,9 +65,7 @@ export function App({ initial }: { initial: Bootstrap }) {
           <span className="brand-mark">
             <Braces size={22} />
           </span>
-          <span>
-            JupSQL<span className="prototype-tag">PROTOTYPE</span>
-          </span>
+          <span>JupSQL</span>
         </div>
         <div className="sidebar-section-label">WORKSPACE</div>
         <button className="notebook-nav">
@@ -126,10 +121,6 @@ export function App({ initial }: { initial: Bootstrap }) {
               <ChevronRight size={13} />
             </button>
           </div>
-          <button className="sidebar-link" onClick={() => setShowHelp(true)}>
-            <CircleHelp size={15} />
-            Notebook guide
-          </button>
           <button
             className="sidebar-link"
             disabled={!bridge.desktop}
@@ -142,10 +133,6 @@ export function App({ initial }: { initial: Bootstrap }) {
             Session log
             <span className="live-dot" />
           </button>
-          <div className="local-label">
-            <Radio size={12} />
-            Local to this computer
-          </div>
         </div>
       </aside>
       <main className="main-panel">
@@ -198,7 +185,6 @@ export function App({ initial }: { initial: Bootstrap }) {
                 value={state.notebook.title}
                 onChange={(e) => state.change({ ...state.notebook, title: e.target.value }, new Set())}
               />
-              <p className="notebook-subtitle">A place to query, connect the dots, and keep your train of thought.</p>
             </div>
             <span className="sql-emblem">
               <Terminal size={26} />
@@ -233,15 +219,7 @@ export function App({ initial }: { initial: Bootstrap }) {
               <div className="info-banner">
                 <Database size={17} />
                 <div>
-                  <strong>
-                    {state.autoConnecting
-                      ? 'Connecting to PostgreSQL…'
-                      : 'Your notebook is ready. Connect a database to run it.'}
-                  </strong>
-                  <p>
-                    The example queries work on any PostgreSQL database. For the local demo, run{' '}
-                    <code>pnpm db:demo</code>.
-                  </p>
+                  <strong>{state.autoConnecting ? 'Connecting to PostgreSQL…' : 'Connect to PostgreSQL'}</strong>
                 </div>
                 <button className="button compact" disabled={state.autoConnecting} onClick={() => setConnecting(true)}>
                   Connect
@@ -337,7 +315,6 @@ export function App({ initial }: { initial: Bootstrap }) {
               <span className="live-dot" />
               {bridge.desktop ? 'Session recording is on' : 'Session recording starts in the desktop app'}
             </span>
-            <span>References use current SQL · Refreshes share one snapshot</span>
           </footer>
         </div>
       </main>
@@ -372,39 +349,6 @@ export function App({ initial }: { initial: Bootstrap }) {
           onClose={() => setConnecting(false)}
           onConnected={state.connected}
         />
-      )}
-      {showHelp && (
-        <div className="modal-backdrop">
-          <section className="modal guide" role="dialog" aria-modal="true" aria-labelledby="guide-title">
-            <div className="flex justify-between">
-              <h2 id="guide-title">A small notebook guide</h2>
-              <button className="icon-button" aria-label="Close guide" onClick={() => setShowHelp(false)}>
-                <X size={18} />
-              </button>
-            </div>
-            <p>
-              Name a query cell <code>orders</code>, then use it as a table in another cell:
-            </p>
-            <pre>SELECT * FROM notebook.orders AS o{'\n'}WHERE o.amount &gt; 100;</pre>
-            <p>
-              References expand the cell’s <strong>current SQL</strong>. They include its entire query, even when its
-              displayed result is limited. Cell order doesn’t affect references.
-            </p>
-            <p>
-              Editing SQL marks dependent results stale. <strong>Rerun dependents</strong> refreshes the source cell and
-              downstream query cells in one read-only database snapshot. Each cell is executed independently; an error
-              doesn’t discard other successful cells.
-            </p>
-            <p>
-              <strong>Mutation cells</strong> run only when you click Run mutation. They may use query definitions, but
-              cannot be referenced. Successful writes mark other results stale.
-            </p>
-            <p>
-              Results show at most 500 rows and 2 MB. Queries time out after 30 seconds. Notes and SQL save
-              automatically; results are kept only for this window.
-            </p>
-          </section>
-        </div>
       )}
       {showSession && (
         <div className="modal-backdrop">
