@@ -54,7 +54,7 @@ export function newNotebook(): Notebook {
   return {
     version: 1,
     title: 'Untitled notebook',
-    cells: [newCell(1)],
+    cells: [],
   };
 }
 

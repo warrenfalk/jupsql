@@ -68,7 +68,7 @@ For a `PGHOST` Unix socket, JupSQL detects the port from the socket filename and
 
 An unsuccessful automatic connection shows an error and leaves the settings editable. Automatic TCP connections prefer TLS when the server supports it unless the URL specifies another mode; the manual dialog can require TLS with certificate verification. Credentials stay in memory. Raw URLs and passwords are excluded from saved files and session logs. Launch the app from the shell exporting the variables, or define them in `.env.local` and load it with direnv.
 
-New notebooks start with one empty query cell. New cells have empty SQL and notes.
+New notebooks start without any cells. Add query creates a cell with empty SQL and notes. Saved notebooks reopen with their existing cells.
 
 `pnpm dev:web` is only a browser preview; database execution, filesystem persistence, and session logs require Tauri.
 

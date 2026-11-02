@@ -43,7 +43,7 @@ describe('notebook state', () => {
   });
 
   it('round trips notebooks and rejects malformed or duplicate identities', () => {
-    const notebook = newNotebook();
+    const notebook = { ...newNotebook(), cells: [newCell(1)] };
     expect(parseNotebook(JSON.stringify(notebook))).toEqual(notebook);
     expect(() => parseNotebook('{"version":2}')).toThrow();
     expect(() => parseNotebook(JSON.stringify({ ...notebook, cells: [notebook.cells[0], notebook.cells[0]] }))).toThrow(

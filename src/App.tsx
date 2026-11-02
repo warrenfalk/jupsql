@@ -192,7 +192,11 @@ export function App({ initial }: { initial: Bootstrap }) {
           </div>
           <div className="notebook-toolbar">
             <div className="flex items-center gap-4">
-              <button className="button primary" disabled={!canRun} onClick={() => void state.execute(null, true)}>
+              <button
+                className="button primary"
+                disabled={!canRun || state.notebook.cells.length === 0}
+                onClick={() => void state.execute(null, true)}
+              >
                 <GitBranch size={15} />
                 Run all queries
               </button>

@@ -116,11 +116,14 @@ try {
     },
   });
   session = created.sessionId;
-  await until('return document.querySelectorAll(".cell-card").length === 1');
+  await until(`return !!document.querySelector('[aria-label="Notebook title"]')`);
+  assert.equal(await evaluate('return document.querySelectorAll(".cell-card").length'), 0);
   assert.equal(
     await evaluate(`return document.querySelector('[aria-label="Notebook title"]').value`),
     'Untitled notebook',
   );
+  await click('Add query');
+  await until('return document.querySelectorAll(".cell-card").length === 1');
   assert.equal(await evaluate(`return document.querySelector('[aria-label="query_1 SQL"]').innerText.trim()`), '');
   assert.equal(await evaluate(`return document.querySelector('[aria-label="query_1 notes"]').value`), '');
   assert.equal(await evaluate('return document.body.innerText.includes("Notebook guide")'), false);
