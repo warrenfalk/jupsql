@@ -13,6 +13,7 @@ use tauri_plugin_dialog::DialogExt;
 struct AppState {
     storage: storage::Storage,
     database: database::Database,
+    connection_defaults: connection::ConnectionDefaults,
 }
 
 #[derive(Serialize)]
@@ -36,7 +37,7 @@ fn bootstrap(state: State<AppState>) -> Result<Bootstrap, String> {
 
 #[tauri::command]
 fn connection_defaults(state: State<AppState>) -> Result<connection::ConnectionDefaults, String> {
-    let defaults = connection::environment_defaults(|name| std::env::var(name).ok());
+    let defaults = state.connection_defaults.clone();
     if defaults.auto_connect {
         let input = &defaults.input;
         state.storage.record("connection_environment", json!({ "host": input.host, "port": input.port, "database": input.database, "user": input.user, "tls": input.tls, "error": defaults.error }))?;
@@ -66,7 +67,7 @@ async fn connect_database(
 
 #[tauri::command]
 async fn connect_environment(state: State<'_, AppState>) -> Result<String, String> {
-    let defaults = connection::environment_defaults(|name| std::env::var(name).ok());
+    let defaults = state.connection_defaults.clone();
     let config = defaults.config.ok_or_else(|| {
         defaults
             .error
@@ -95,11 +96,15 @@ async fn establish_connection(
     };
     state.storage.record("connection_attempt", json!({ "host": input.host, "port": input.port, "database": input.database, "user": input.user, "tls": input.tls, "error": result.as_ref().err() }))?;
     let label = result?;
+    let config = config?;
+    state
+        .storage
+        .associate_connection(connection::ConnectionIdentity::from_config(&config))?;
     *state
         .database
         .connection
         .lock()
-        .map_err(|e| e.to_string())? = Some(config?);
+        .map_err(|e| e.to_string())? = Some(config);
     Ok(label)
 }
 
@@ -192,10 +197,17 @@ pub fn run() {
             let directory = std::env::var_os("JUPSQL_DATA_DIR")
                 .map(std::path::PathBuf::from)
                 .unwrap_or(app.path().app_data_dir()?);
-            let storage = storage::Storage::new(directory).map_err(std::io::Error::other)?;
+            let defaults = connection::environment_defaults(|name| std::env::var(name).ok());
+            let identity = defaults
+                .config
+                .as_ref()
+                .map(connection::ConnectionIdentity::from_config);
+            let storage =
+                storage::Storage::new(directory, identity).map_err(std::io::Error::other)?;
             app.manage(AppState {
                 storage,
                 database: database::Database::default(),
+                connection_defaults: defaults,
             });
             #[cfg(target_os = "linux")]
             prepare_display();

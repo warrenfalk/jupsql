@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
@@ -46,30 +47,47 @@ if (connectionMode === 'defaults') {
   }
 }
 await mkdir(`${process.env.JUPSQL_DATA_DIR}/runtime`, { recursive: true, mode: 0o700 });
+const driverEnvironment = {
+  ...connectionEnvironment,
+  XDG_CONFIG_HOME: `${process.env.JUPSQL_DATA_DIR}/config`,
+  XDG_CACHE_HOME: `${process.env.JUPSQL_DATA_DIR}/cache`,
+  XDG_DATA_HOME: `${process.env.JUPSQL_DATA_DIR}/share`,
+  XDG_RUNTIME_DIR: `${process.env.JUPSQL_DATA_DIR}/runtime`,
+  GIO_USE_VFS: 'local',
+  NO_AT_BRIDGE: '1',
+};
 const driver = spawn('WebKitWebDriver', [`--port=${port}`, '--host=127.0.0.1'], {
-  env: {
-    ...connectionEnvironment,
-    XDG_CONFIG_HOME: `${process.env.JUPSQL_DATA_DIR}/config`,
-    XDG_CACHE_HOME: `${process.env.JUPSQL_DATA_DIR}/cache`,
-    XDG_DATA_HOME: `${process.env.JUPSQL_DATA_DIR}/share`,
-    XDG_RUNTIME_DIR: `${process.env.JUPSQL_DATA_DIR}/runtime`,
-    GIO_USE_VFS: 'local',
-    NO_AT_BRIDGE: '1',
-  },
+  env: driverEnvironment,
   stdio: ['ignore', 'inherit', 'inherit'],
 });
 let session;
 
-async function request(path, method = 'GET', body) {
-  const response = await fetch(`${base}${path}`, {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(35_000),
+function driverRequests(endpoint) {
+  return async (path, method = 'GET', body) => {
+    const response = await fetch(`${endpoint}${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(35_000),
+    });
+    const { value } = await response.json();
+    if (value?.error) throw new Error(`${value.error}: ${value.message}`);
+    return value;
+  };
+}
+const request = driverRequests(base);
+
+async function createSession(send) {
+  const created = await send('/session', 'POST', {
+    capabilities: {
+      alwaysMatch: {
+        'webkitgtk:browserOptions': {
+          binary: resolve(process.env.JUPSQL_TEST_BINARY ?? 'src-tauri/target/debug/jupsql'),
+        },
+      },
+    },
   });
-  const { value } = await response.json();
-  if (value?.error) throw new Error(`${value.error}: ${value.message}`);
-  return value;
+  return created.sessionId;
 }
 
 const evaluate = (script, args = []) => request(`/session/${session}/execute/sync`, 'POST', { script, args });
@@ -106,16 +124,7 @@ try {
       await sleep(100);
     }
   }
-  const created = await request('/session', 'POST', {
-    capabilities: {
-      alwaysMatch: {
-        'webkitgtk:browserOptions': {
-          binary: resolve(process.env.JUPSQL_TEST_BINARY ?? 'src-tauri/target/debug/jupsql'),
-        },
-      },
-    },
-  });
-  session = created.sessionId;
+  session = await createSession(request);
   await until(`return !!document.querySelector('[aria-label="Notebook title"]')`);
   assert.equal(await evaluate('return document.querySelectorAll(".cell-card").length'), 0);
   assert.equal(
@@ -353,6 +362,15 @@ try {
   if (connectionEnvironment.DATABASE_URL) {
     assert.ok(!log.value.includes(connectionEnvironment.DATABASE_URL));
   }
+  const catalog = await readFile(`${process.env.JUPSQL_DATA_DIR}/catalog.json`, 'utf8');
+  for (const credential of [
+    'environment-password-never-save-or-log',
+    'url@password-never-save-or-log',
+    'url-password-never-save-or-log',
+  ]) {
+    assert.ok(!catalog.includes(credential));
+  }
+  if (connectionEnvironment.DATABASE_URL) assert.ok(!catalog.includes(connectionEnvironment.DATABASE_URL));
   const profile = await evaluate('return localStorage.getItem("jupsql.connection")');
   assert.ok(!profile?.includes('environment-password-never-save-or-log'));
   assert.equal(events.filter((event) => event.event === 'connection_environment').length, 1);
@@ -374,14 +392,110 @@ try {
   );
   await invoke('plugin:window|close', { label: 'main' });
   for (let i = 0; i < 50; i += 1) {
-    const saved = JSON.parse(await readFile(`${process.env.JUPSQL_DATA_DIR}/notebook.json`, 'utf8'));
+    const saved = JSON.parse(await readFile(`${bootstrap.value.dataDirectory}/notebook.json`, 'utf8'));
     if (saved.title === 'Close flush check') break;
     await sleep(100);
   }
   assert.equal(
-    JSON.parse(await readFile(`${process.env.JUPSQL_DATA_DIR}/notebook.json`, 'utf8')).title,
+    JSON.parse(await readFile(`${bootstrap.value.dataDirectory}/notebook.json`, 'utf8')).title,
     'Close flush check',
   );
+  if (connectionMode === 'tcp') {
+    const peerPort = port + 1;
+    const peerRequest = driverRequests(`http://127.0.0.1:${peerPort}`);
+    let peerDriver;
+    let peerSession;
+    const peerEvaluate = (script) => peerRequest(`/session/${peerSession}/execute/sync`, 'POST', { script, args: [] });
+    const peerInvoke = (command, args) =>
+      peerRequest(`/session/${peerSession}/execute/async`, 'POST', {
+        script:
+          'const done = arguments[arguments.length - 1]; window.__TAURI_INTERNALS__.invoke(arguments[0], arguments[1]).then(value => done({value}), error => done({error:String(error)}));',
+        args: [command, args],
+      });
+    async function openPeer(environment) {
+      peerDriver = spawn('WebKitWebDriver', [`--port=${peerPort}`, '--host=127.0.0.1'], {
+        env: { ...driverEnvironment, ...environment },
+        stdio: ['ignore', 'inherit', 'inherit'],
+      });
+      for (let i = 0; i < 50; i += 1) {
+        try {
+          await peerRequest('/status');
+          break;
+        } catch {
+          await sleep(100);
+        }
+      }
+      peerSession = await createSession(peerRequest);
+      for (let i = 0; i < 100; i += 1) {
+        if (await peerEvaluate(`return !!document.querySelector('[aria-label="Notebook title"]')`)) break;
+        await sleep(100);
+      }
+      return (await peerInvoke('bootstrap', {})).value;
+    }
+    async function closePeer() {
+      try {
+        if (peerSession) {
+          const closed = await peerInvoke('plugin:window|close', { label: 'main' });
+          assert.equal(closed.error, undefined);
+          await peerRequest(`/session/${peerSession}`, 'DELETE').catch(() => {});
+        }
+      } finally {
+        peerSession = null;
+        if (peerDriver && peerDriver.exitCode === null && peerDriver.signalCode === null) {
+          const exited = once(peerDriver, 'exit');
+          peerDriver.kill('SIGTERM');
+          await exited;
+        }
+      }
+    }
+    async function reopenPrimary() {
+      await request(`/session/${session}`, 'DELETE').catch(() => {});
+      session = await createSession(request);
+      await until(`return !!document.querySelector('[aria-label="Notebook title"]')`);
+      return (await invoke('bootstrap', {})).value;
+    }
+    try {
+      const resumed = await reopenPrimary();
+      assert.equal(resumed.dataDirectory, bootstrap.value.dataDirectory);
+      assert.equal(resumed.notebook.title, 'Close flush check');
+      assert.equal(resumed.notebook.cells.length, 3);
+
+      // An already-open most recent notebook creates a new empty notebook in a second process.
+      const parallel = await openPeer({});
+      assert.notEqual(parallel.dataDirectory, resumed.dataDirectory);
+      assert.equal(parallel.notebook.title, 'Untitled notebook');
+      assert.equal(parallel.notebook.cells.length, 0);
+      assert.equal(await evaluate('return document.querySelectorAll(".cell-card").length'), 3);
+      await closePeer();
+      await invoke('plugin:window|close', { label: 'main' });
+      const latest = await reopenPrimary();
+      assert.equal(latest.dataDirectory, parallel.dataDirectory);
+      assert.equal(latest.notebook.cells.length, 0);
+
+      // A different database has separate history, even when it was opened more recently.
+      const other = await openPeer({ PGDATABASE: 'postgres' });
+      assert.notEqual(other.dataDirectory, latest.dataDirectory);
+      assert.notEqual(other.dataDirectory, resumed.dataDirectory);
+      assert.equal(other.notebook.cells.length, 0);
+      await peerEvaluate(
+        `const input = document.querySelector('[aria-label="Notebook title"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'Other database notebook'); input.dispatchEvent(new Event('input', {bubbles:true}));`,
+      );
+      await closePeer();
+      assert.equal(
+        JSON.parse(await readFile(`${other.dataDirectory}/notebook.json`, 'utf8')).title,
+        'Other database notebook',
+      );
+      await invoke('plugin:window|close', { label: 'main' });
+      const matching = await reopenPrimary();
+      assert.equal(matching.dataDirectory, parallel.dataDirectory);
+      assert.equal(matching.notebook.title, 'Untitled notebook');
+      console.log(
+        'Native notebook history passed: resume, concurrent empty notebook, latest-opened selection, and separate database history.',
+      );
+    } finally {
+      await closePeer().catch(() => {});
+    }
+  }
   console.log(
     `Native Tauri smoke passed (${connectionMode} connection): blank startup and new cells, import, connect, run, shared snapshot, edit/stale propagation, Ctrl+Enter, Ctrl+Shift+Enter, current SQL composition, rename validation, refresh, persistence, logs, and save on close.`,
   );

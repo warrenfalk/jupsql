@@ -72,7 +72,7 @@ async fn real_postgres_execution_contract() {
     *database.connection.lock().unwrap() = Some(database::configuration(&connection));
     let directory =
         std::env::temp_dir().join(format!("jupsql-integration-{}", uuid::Uuid::new_v4()));
-    let storage = Storage::new(directory.clone()).unwrap();
+    let storage = Storage::new(directory.clone(), None).unwrap();
 
     // DATABASE_URL must win over PG variables and retain options on every query connection.
     let url = format!(

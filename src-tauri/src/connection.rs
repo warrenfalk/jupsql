@@ -1,11 +1,11 @@
 use crate::model::ConnectionInput;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio_postgres::{
     Config,
     config::{Host, SslMode},
 };
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionDefaults {
     pub input: ConnectionInput,
@@ -13,6 +13,67 @@ pub struct ConnectionDefaults {
     pub error: Option<String>,
     #[serde(skip)]
     pub config: Option<Config>,
+}
+
+/// Only database identity belongs in notebook history, never credentials or raw URLs.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionIdentity {
+    endpoints: Vec<Endpoint>,
+    database: String,
+    user: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+struct Endpoint {
+    host: Option<IdentityHost>,
+    address: Option<String>,
+    port: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum IdentityHost {
+    Tcp(String),
+    Unix(std::path::PathBuf),
+}
+
+impl ConnectionIdentity {
+    pub fn from_config(config: &Config) -> Self {
+        let count = config
+            .get_hosts()
+            .len()
+            .max(config.get_hostaddrs().len())
+            .max(1);
+        let endpoints = (0..count)
+            .map(|index| Endpoint {
+                host: match config.get_hosts().get(index) {
+                    Some(Host::Tcp(host)) => Some(IdentityHost::Tcp(host.to_ascii_lowercase())),
+                    #[cfg(unix)]
+                    Some(Host::Unix(path)) => Some(IdentityHost::Unix(
+                        std::fs::canonicalize(path).unwrap_or_else(|_| path.clone()),
+                    )),
+                    None if config.get_hosts().is_empty() && config.get_hostaddrs().is_empty() => {
+                        Some(IdentityHost::Tcp("localhost".into()))
+                    }
+                    None => None,
+                },
+                address: config.get_hostaddrs().get(index).map(ToString::to_string),
+                port: config
+                    .get_ports()
+                    .get(index)
+                    .or_else(|| config.get_ports().first())
+                    .copied()
+                    .unwrap_or(5432),
+            })
+            .collect();
+        let user = config.get_user().unwrap_or("postgres").to_owned();
+        Self {
+            endpoints,
+            database: config.get_dbname().unwrap_or(&user).to_owned(),
+            user,
+        }
+    }
 }
 
 pub fn environment_defaults(get: impl Fn(&str) -> Option<String>) -> ConnectionDefaults {
@@ -293,6 +354,98 @@ mod tests {
             assert!(!error.contains("keep-this-secret"));
             assert_ne!(result.input.host, "fallback.example");
         }
+    }
+
+    #[test]
+    fn notebook_identity_matches_url_and_pg_settings_without_credentials_or_session_options() {
+        let pg = defaults(&[
+            ("PGHOST", "DB.EXAMPLE"),
+            ("PGDATABASE", "reports"),
+            ("PGUSER", "analyst"),
+            ("PGPASSWORD", "pg-secret"),
+        ]);
+        let url = defaults(&[(
+            "DATABASE_URL",
+            "postgres://analyst:url-secret@db.example:5432/reports?sslmode=require&application_name=notebook-client&options=-c%20search_path%3Dprivate",
+        )]);
+        let identity = ConnectionIdentity::from_config(pg.config.as_ref().unwrap());
+        assert_eq!(
+            identity,
+            ConnectionIdentity::from_config(url.config.as_ref().unwrap())
+        );
+        let encoded = serde_json::to_string(&identity).unwrap();
+        for secret in [
+            "pg-secret",
+            "url-secret",
+            "postgres://",
+            "notebook-client",
+            "private",
+        ] {
+            assert!(!encoded.contains(secret));
+        }
+        for (key, value) in [
+            ("PGHOST", "other.example"),
+            ("PGPORT", "5433"),
+            ("PGDATABASE", "other"),
+            ("PGUSER", "other"),
+        ] {
+            let mut vars = vec![
+                ("PGHOST", "db.example"),
+                ("PGDATABASE", "reports"),
+                ("PGUSER", "analyst"),
+            ];
+            vars.retain(|(name, _)| *name != key);
+            vars.push((key, value));
+            assert_ne!(
+                identity,
+                ConnectionIdentity::from_config(defaults(&vars).config.as_ref().unwrap())
+            );
+        }
+    }
+
+    #[test]
+    fn notebook_identity_includes_all_hosts_addresses_and_ports() {
+        let a: Config = "postgres://analyst@first.example,second.example:5433/reports"
+            .parse()
+            .unwrap();
+        let b: Config = "postgres://analyst@first.example,other.example:5433/reports"
+            .parse()
+            .unwrap();
+        assert_ne!(
+            ConnectionIdentity::from_config(&a),
+            ConnectionIdentity::from_config(&b)
+        );
+        let mut addresses = a.clone();
+        addresses.hostaddr("127.0.0.1".parse().unwrap());
+        assert_ne!(
+            ConnectionIdentity::from_config(&a),
+            ConnectionIdentity::from_config(&addresses)
+        );
+        let ports: Config = "postgres://analyst@first.example,second.example:5434/reports"
+            .parse()
+            .unwrap();
+        assert_ne!(
+            ConnectionIdentity::from_config(&a),
+            ConnectionIdentity::from_config(&ports)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn notebook_identity_matches_socket_directory_and_full_socket_path() {
+        use std::os::unix::net::UnixListener;
+        let root = std::env::temp_dir().join(format!("jupsql-identity-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let socket = root.join(".s.PGSQL.55433");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let directory = defaults(&[("PGHOST", root.to_str().unwrap())]);
+        let file = defaults(&[("PGHOST", socket.to_str().unwrap()), ("PGPORT", "ignored")]);
+        assert_eq!(
+            ConnectionIdentity::from_config(directory.config.as_ref().unwrap()),
+            ConnectionIdentity::from_config(file.config.as_ref().unwrap())
+        );
+        drop(listener);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(unix)]

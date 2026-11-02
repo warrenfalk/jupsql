@@ -68,7 +68,7 @@ For a `PGHOST` Unix socket, JupSQL detects the port from the socket filename and
 
 An unsuccessful automatic connection shows an error and leaves the settings editable. Automatic TCP connections prefer TLS when the server supports it unless the URL specifies another mode; the manual dialog can require TLS with certificate verification. Credentials stay in memory. Raw URLs and passwords are excluded from saved files and session logs. Launch the app from the shell exporting the variables, or define them in `.env.local` and load it with direnv.
 
-New notebooks start without any cells. Add query creates a cell with empty SQL and notes. Saved notebooks reopen with their existing cells.
+On startup, JupSQL reopens the most recently opened notebook for the current connection. If there is no matching notebook, or that notebook is already open in another window, it creates a new empty notebook. Add query creates a cell with empty SQL and notes.
 
 `pnpm dev:web` is only a browser preview; database execution, filesystem persistence, and session logs require Tauri.
 
@@ -98,11 +98,17 @@ GROUP BY customer;
 In the development shell, data lives in `.local-data/` (ignored by Git):
 
 ```text
-.local-data/notebook.json           current notebook, saved atomically
+.local-data/catalog.json            connection history and notebook IDs
+.local-data/notebooks/<id>/notebook.json
+.local-data/notebooks/<id>/notebook.lock
 .local-data/sessions/<time>-<id>.jsonl
 ```
 
 Outside that shell, the default is Tauri's OS application-data directory for `dev.warren.jupsql`. `JUPSQL_DATA_DIR` can choose another directory. SQL and notes autosave after a short debounce, and closing the window flushes the latest draft. Results are kept in memory only. Import/export uses `.jupsql.json` files; importing replaces the current notebook. Export the current notebook first if you want to keep it separately.
+
+Notebook history matches resolved hosts or Unix sockets, ports, database, and username. Passwords, raw connection URLs, TLS preferences, and session options are excluded from this identity. URL and PG-variable settings for the same connection share history. Successful manual connection changes associate the current notebook with that connection; notebook selection happens at startup. Invalid startup settings create an empty notebook that can be associated through the connection dialog.
+
+Each notebook has its own lock, so separate windows can save independently. If the most recently opened matching notebook is busy, a new notebook is created even when older matching notebooks are available. Saving or closing a window does not change its open recency. Existing legacy `notebook.json` files at the data-directory root are preserved for import; they are not assigned to an arbitrary connection.
 
 Use **Session log** to inspect the current log, copy its path, or export it. To investigate a session, start at `run_started` for the submitted notebook and targets, follow `snapshot_acquired`, then inspect each `cell_started`/`cell_finished` and the final `run_finished`. Match events using `sessionId`, `runId`, and `cellId`. `notebook_saved` records debounced draft snapshots; focus/add/delete/reorder/import events record navigation and editing context.
 
@@ -124,7 +130,7 @@ The PostgreSQL integration test creates and removes a disposable cluster. It che
 
 The native desktop smoke test uses WebKitWebDriver, an isolated Xvfb display, and separate notebook directories. It checks manual connections, automatic TCP/socket connections, recovery after automatic connection failures, password exclusion, running, editing, transitive staleness, composing current SQL, reference errors, saving, and session logs. Its screenshot and session log are written under `.cache/validation/`.
 
-Build a desktop executable with `pnpm desktop:build` (or add `--debug` for a faster local build). Installer packaging, schema browsing, multiple simultaneous notebooks/connections, charts, and references to cached results are outside this prototype. The SQL parser supports a broad PostgreSQL subset; unsupported syntax is reported rather than sent unchanged.
+Build a desktop executable with `pnpm desktop:build` (or add `--debug` for a faster local build). Each application window has one notebook and connection; separate launches can open independent notebooks. Installer packaging, schema browsing, notebook browsing within a window, charts, and references to cached results are outside this prototype. The SQL parser supports a broad PostgreSQL subset; unsupported syntax is reported rather than sent unchanged.
 
 Implementation: React/Vite/TypeScript with CodeMirror and Tailwind in `src/`; SQL analysis/expansion in `src-tauri/src/compiler.rs`; database transactions and cancellation in `database.rs`; local persistence and JSONL recording in `storage.rs`.
 

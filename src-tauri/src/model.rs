@@ -23,6 +23,16 @@ pub struct Notebook {
     pub cells: Vec<Cell>,
 }
 
+impl Notebook {
+    pub fn empty() -> Self {
+        Self {
+            version: 1,
+            title: "Untitled notebook".into(),
+            cells: vec![],
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Analysis {
