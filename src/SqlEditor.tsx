@@ -13,7 +13,9 @@ const editorTheme = EditorView.theme({
   },
   '.cm-line': { padding: '0 18px' },
   '.cm-gutters': { backgroundColor: '#fcfcfd', color: '#a4adbc', border: 'none', paddingLeft: '12px' },
-  '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: '#f2f5fa' },
+  // CodeMirror paints selections behind the text, so line shading must be translucent.
+  '.cm-activeLine': { backgroundColor: '#b0c4e020' },
+  '.cm-activeLineGutter': { backgroundColor: '#f2f5fa' },
   '&.cm-focused': { outline: 'none' },
   '.cm-scroller': { overflow: 'auto' },
 });
