@@ -9,6 +9,7 @@ import {
   GitBranch,
   History,
   LoaderCircle,
+  Lock,
   Plus,
   Square,
   Terminal,
@@ -22,9 +23,16 @@ import { affectedIds, newCell, newNotebook, parseNotebook } from './model';
 import type { Bootstrap, Cell } from './model';
 import { download } from './Results';
 import { useNotebook } from './useNotebook';
+import { useNotebooks } from './useNotebooks';
 
 export function App({ initial }: { initial: Bootstrap }) {
-  const state = useNotebook(initial.notebook ?? newNotebook(), initial.connectionDefaults);
+  const [workspace, setWorkspace] = useState(initial);
+  return <NotebookWorkspace key={workspace.notebookId} initial={workspace} onOpened={setWorkspace} />;
+}
+
+function NotebookWorkspace({ initial, onOpened }: { initial: Bootstrap; onOpened: (next: Bootstrap) => void }) {
+  const state = useNotebook(initial.notebook ?? newNotebook(), initial.connectionDefaults, initial.notebookId);
+  const workspace = useNotebooks(initial.notebookId);
   const [connecting, setConnecting] = useState(false);
   const [showSession, setShowSession] = useState(false);
   const [sessionText, setSessionText] = useState('');
@@ -32,7 +40,20 @@ export function App({ initial }: { initial: Bootstrap }) {
   const [deleted, setDeleted] = useState<{ cell: Cell; index: number } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const names = state.notebook.cells.map((cell) => cell.name);
-  const canRun = bridge.desktop && !!state.connection && !state.busy && !state.analyzing && !connecting;
+  const canRun =
+    bridge.desktop && !!state.connection && !state.busy && !state.switching && !state.analyzing && !connecting;
+  const notebooks = workspace.notebooks.some((notebook) => notebook.id === initial.notebookId)
+    ? workspace.notebooks
+    : [
+        {
+          id: initial.notebookId,
+          title: state.notebook.title,
+          lastActivity: Date.now(),
+          isOpen: true,
+          connection: state.connection,
+        },
+        ...workspace.notebooks,
+      ];
   const staleCount = state.notebook.cells.filter((cell) => {
     const result = state.results[cell.id];
     return (
@@ -60,7 +81,7 @@ export function App({ initial }: { initial: Bootstrap }) {
   }
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" aria-busy={state.switching}>
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-mark">
@@ -69,11 +90,51 @@ export function App({ initial }: { initial: Bootstrap }) {
           <span>JupSQL</span>
         </div>
         <div className="sidebar-section-label">WORKSPACE</div>
-        <button className="notebook-nav">
-          <BookOpen size={16} />
-          <span className="truncate">{state.notebook.title || 'Untitled notebook'}</span>
-          <ChevronRight size={14} />
-        </button>
+        <nav className="notebook-list" aria-label="Workspace notebooks">
+          {notebooks.map((notebook) => {
+            const current = notebook.id === initial.notebookId;
+            const elsewhere = notebook.isOpen && !current;
+            const title = (current ? state.notebook.title : notebook.title) || 'Untitled notebook';
+            return (
+              <button
+                key={notebook.id}
+                data-notebook-id={notebook.id}
+                className={`notebook-nav ${current ? 'selected' : ''}`}
+                aria-current={current ? 'page' : undefined}
+                title={`${notebook.connection ?? 'No connection'}\nLast activity: ${new Date(notebook.lastActivity).toLocaleString()}${elsewhere ? '\nOpen in another window' : ''}`}
+                disabled={
+                  !bridge.desktop || elsewhere || state.switching || state.busy || state.autoConnecting || connecting
+                }
+                onClick={() => {
+                  void state.openNotebook(notebook.id).then((next) => {
+                    if (next) onOpened(next);
+                  });
+                }}
+              >
+                <BookOpen size={16} />
+                <span className="notebook-info">
+                  <span className="truncate">{title}</span>
+                  <small className="truncate">{notebook.connection ?? 'No connection'}</small>
+                </span>
+                {elsewhere ? (
+                  <Lock size={13} aria-label="Open in another window" />
+                ) : current ? (
+                  <ChevronRight size={14} />
+                ) : null}
+              </button>
+            );
+          })}
+        </nav>
+        {workspace.error && (
+          <p role="alert" className="workspace-error">
+            {workspace.error}
+          </p>
+        )}
+        {state.switching && (
+          <p role="status" className="workspace-status">
+            Opening notebook…
+          </p>
+        )}
         <div className="outline-heading">
           <span className="sidebar-section-label">CELLS</span>
           <span>{state.notebook.cells.length}</span>
@@ -100,7 +161,11 @@ export function App({ initial }: { initial: Bootstrap }) {
             );
           })}
         </nav>
-        <button className="sidebar-add" onClick={addCell} disabled={state.notebook.cells.length >= 100}>
+        <button
+          className="sidebar-add"
+          onClick={addCell}
+          disabled={state.switching || state.notebook.cells.length >= 100}
+        >
           <Plus size={14} />
           Add query
         </button>
@@ -115,7 +180,7 @@ export function App({ initial }: { initial: Bootstrap }) {
               {state.autoConnecting ? 'Connecting from environment…' : (state.connection ?? 'No database connected')}
             </p>
             <button
-              disabled={!bridge.desktop || state.busy || state.autoConnecting}
+              disabled={!bridge.desktop || state.switching || state.busy || state.autoConnecting}
               onClick={() => setConnecting(true)}
             >
               {state.connection ? 'Change connection' : 'Connect a database'}
@@ -124,10 +189,10 @@ export function App({ initial }: { initial: Bootstrap }) {
           </div>
           <button
             className="sidebar-link"
-            disabled={!bridge.desktop}
+            disabled={!bridge.desktop || state.switching}
             onClick={() => {
               setShowSession(true);
-              void bridge.sessionLog().then(setSessionText).catch(state.fail);
+              void bridge.sessionLog(initial.notebookId).then(setSessionText).catch(state.fail);
             }}
           >
             <History size={15} />
@@ -136,7 +201,7 @@ export function App({ initial }: { initial: Bootstrap }) {
           </button>
         </div>
       </aside>
-      <main className="main-panel">
+      <main className="main-panel" inert={state.switching}>
         <header className="topbar">
           <div className="flex items-center gap-2">
             <BookOpen size={14} />
@@ -350,6 +415,7 @@ export function App({ initial }: { initial: Bootstrap }) {
       />
       {connecting && (
         <ConnectionDialog
+          notebookId={initial.notebookId}
           initialValue={state.connectionInput}
           onClose={() => setConnecting(false)}
           onConnected={state.connected}
@@ -376,7 +442,7 @@ export function App({ initial }: { initial: Bootstrap }) {
             <div className="flex justify-between">
               <button
                 className="button"
-                onClick={() => void bridge.sessionLog().then(setSessionText).catch(state.fail)}
+                onClick={() => void bridge.sessionLog(initial.notebookId).then(setSessionText).catch(state.fail)}
               >
                 Refresh
               </button>

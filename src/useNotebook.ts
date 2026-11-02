@@ -3,6 +3,7 @@ import * as bridge from './bridge';
 import { acceptResults, affectedIds } from './model';
 import type {
   Analysis,
+  Bootstrap,
   Cell,
   ConnectionDefaults,
   ConnectionInput,
@@ -14,12 +15,14 @@ import type {
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-export function useNotebook(initial: Notebook, defaults: ConnectionDefaults) {
+export function useNotebook(initial: Notebook, defaults: ConnectionDefaults, notebookId: string) {
   const [notebook, setNotebook] = useState(initial);
   const [analyses, setAnalyses] = useState<Analysis[]>([]);
   const [analyzing, setAnalyzing] = useState(bridge.desktop);
   const [results, setResults] = useState<Record<string, DisplayResult>>({});
   const [busy, setBusy] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const switchingLock = useRef(false);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [notice, setNotice] = useState<string | null>(
     defaults.error ? `Automatic connection failed: ${defaults.error}` : null,
@@ -40,7 +43,7 @@ export function useNotebook(initial: Notebook, defaults: ConnectionDefaults) {
   useEffect(() => {
     if (!bridge.desktop || !defaults.autoConnect || defaults.error) return;
     let disposed = false;
-    automaticConnection.current ??= bridge.connectEnvironment();
+    automaticConnection.current ??= bridge.connectEnvironment(notebookId);
     void automaticConnection.current
       .then((label) => {
         if (!disposed) setConnection(label);
@@ -57,7 +60,7 @@ export function useNotebook(initial: Notebook, defaults: ConnectionDefaults) {
   }, [defaults]);
 
   function log(event: string, data: Record<string, unknown>) {
-    void bridge.record(event, data).catch((error: unknown) => setLoggingError(message(error)));
+    void bridge.record(notebookId, event, data).catch((error: unknown) => setLoggingError(message(error)));
   }
 
   useEffect(() => {
@@ -75,26 +78,22 @@ export function useNotebook(initial: Notebook, defaults: ConnectionDefaults) {
 
   useEffect(() => {
     if (!bridge.desktop) return;
-    const subscription = bridge.subscribeClose(
+    return bridge.subscribeClose(
       async () => {
         closing.current = true;
         if (activeExecution.current) {
-          await bridge.cancel();
+          await bridge.cancel(notebookId);
           await activeExecution.current.catch(() => {});
         }
         await saveQueue.current.catch(() => {});
-        await bridge.save(latestNotebook.current);
-        await bridge.record('window_close_requested', {});
+        await bridge.save(notebookId, latestNotebook.current);
+        await bridge.record(notebookId, 'window_close_requested', {});
       },
       (error) => {
         closing.current = false;
         setLoggingError(message(error));
       },
     );
-    void subscription.catch((error: unknown) => setNotice(message(error)));
-    return () => {
-      void subscription.then((unlisten) => unlisten()).catch(() => {});
-    };
   }, []);
 
   useEffect(() => {
@@ -126,8 +125,8 @@ export function useNotebook(initial: Notebook, defaults: ConnectionDefaults) {
     if (!bridge.desktop) return;
     let disposed = false;
     const timer = setTimeout(() => {
-      if (closing.current) return;
-      saveQueue.current = saveQueue.current.catch(() => {}).then(() => bridge.save(notebook));
+      if (closing.current || switchingLock.current) return;
+      saveQueue.current = saveQueue.current.catch(() => {}).then(() => bridge.save(notebookId, notebook));
       void saveQueue.current
         .then(() => {
           if (!disposed) setSaveState('Saved locally');
@@ -146,6 +145,7 @@ export function useNotebook(initial: Notebook, defaults: ConnectionDefaults) {
   }, [notebook]);
 
   function change(next: Notebook, changed: Set<string>) {
+    if (switchingLock.current || closing.current) return;
     latestNotebook.current = next;
     setNotebook(next);
     setAnalyzing(bridge.desktop);
@@ -176,14 +176,14 @@ export function useNotebook(initial: Notebook, defaults: ConnectionDefaults) {
   }
 
   async function execute(cellId: string | null, bulk: boolean) {
-    if (runLock.current || !connection || analyzing || !bridge.desktop) return;
+    if (runLock.current || switchingLock.current || !connection || analyzing || !bridge.desktop) return;
     runLock.current = true;
     setBusy(true);
     setNotice(null);
     setProgress(null);
     changedDuringRun.current = new Set();
     try {
-      activeExecution.current = bridge.run(notebook, cellId, bulk);
+      activeExecution.current = bridge.run(notebookId, notebook, cellId, bulk);
       const result = await activeExecution.current;
       if (result.loggingError) setLoggingError(result.loggingError);
       const mutation = !bulk && notebook.cells.find((cell) => cell.id === cellId)?.kind === 'mutation';
@@ -205,12 +205,31 @@ export function useNotebook(initial: Notebook, defaults: ConnectionDefaults) {
     }
   }
 
+  async function openNotebook(id: string): Promise<Bootstrap | null> {
+    if (id === notebookId || switchingLock.current || runLock.current || autoConnecting || closing.current) return null;
+    switchingLock.current = true;
+    setSwitching(true);
+    try {
+      await saveQueue.current.catch(() => {});
+      await bridge.save(notebookId, latestNotebook.current);
+      setSaveState('Saved locally');
+      return await bridge.openNotebook(notebookId, id);
+    } catch (error) {
+      switchingLock.current = false;
+      setSwitching(false);
+      setNotice(message(error));
+      return null;
+    }
+  }
+
   return {
     notebook,
     analyses,
     analyzing,
     results,
     busy,
+    switching,
+    openNotebook,
     progress,
     notice,
     saveState,
@@ -231,7 +250,7 @@ export function useNotebook(initial: Notebook, defaults: ConnectionDefaults) {
       invalidateAll();
     },
     cancel: () => {
-      void bridge.cancel().catch((error: unknown) => setNotice(message(error)));
+      void bridge.cancel(notebookId).catch((error: unknown) => setNotice(message(error)));
     },
     fail: (error: unknown) => setNotice(message(error)),
   };

@@ -61,6 +61,7 @@ const driver = spawn('WebKitWebDriver', [`--port=${port}`, '--host=127.0.0.1'], 
   stdio: ['ignore', 'inherit', 'inherit'],
 });
 let session;
+let notebookId;
 
 function driverRequests(endpoint) {
   return async (path, method = 'GET', body) => {
@@ -71,7 +72,7 @@ function driverRequests(endpoint) {
       signal: AbortSignal.timeout(35_000),
     });
     const { value } = await response.json();
-    if (value?.error) throw new Error(`${value.error}: ${value.message}`);
+    if (!response.ok) throw new Error(`${value?.error}: ${value?.message}`);
     return value;
   };
 }
@@ -104,11 +105,14 @@ const click = (text) =>
     `const scope = document.querySelector('[role=dialog]') || document; const button = [...scope.querySelectorAll('button')].find(b => b.textContent.trim() === arguments[0]); if (!button || button.disabled) throw new Error('Button unavailable: ' + arguments[0]); button.click();`,
     [text],
   );
-const invoke = (command, args) =>
-  request(`/session/${session}/execute/async`, 'POST', {
+const invoke = async (command, args) => {
+  const result = await request(`/session/${session}/execute/async`, 'POST', {
     script: `const done = arguments[arguments.length - 1]; window.__TAURI_INTERNALS__.invoke(arguments[0], arguments[1]).then(value => done({value}), error => done({error:String(error)}));`,
-    args: [command, args],
+    args: [command, { notebookId, ...args }],
   });
+  if (command === 'bootstrap' && result.value) notebookId = result.value.notebookId;
+  return result;
+};
 const setInput = (selector, value) =>
   evaluate(
     `const input = document.querySelector(arguments[0]); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, arguments[1]); input.dispatchEvent(new Event('input', {bubbles:true}));`,
@@ -405,13 +409,17 @@ try {
     const peerRequest = driverRequests(`http://127.0.0.1:${peerPort}`);
     let peerDriver;
     let peerSession;
+    let peerNotebookId;
     const peerEvaluate = (script) => peerRequest(`/session/${peerSession}/execute/sync`, 'POST', { script, args: [] });
-    const peerInvoke = (command, args) =>
-      peerRequest(`/session/${peerSession}/execute/async`, 'POST', {
+    const peerInvoke = async (command, args) => {
+      const result = await peerRequest(`/session/${peerSession}/execute/async`, 'POST', {
         script:
           'const done = arguments[arguments.length - 1]; window.__TAURI_INTERNALS__.invoke(arguments[0], arguments[1]).then(value => done({value}), error => done({error:String(error)}));',
-        args: [command, args],
+        args: [command, { notebookId: peerNotebookId, ...args }],
       });
+      if (command === 'bootstrap' && result.value) peerNotebookId = result.value.notebookId;
+      return result;
+    };
     async function openPeer(environment) {
       peerDriver = spawn('WebKitWebDriver', [`--port=${peerPort}`, '--host=127.0.0.1'], {
         env: { ...driverEnvironment, ...environment },
@@ -489,6 +497,104 @@ try {
       const matching = await reopenPrimary();
       assert.equal(matching.dataDirectory, parallel.dataDirectory);
       assert.equal(matching.notebook.title, 'Untitled notebook');
+      await until(`return !!document.querySelector('.connection-dot.connected')`);
+      await until(`return document.querySelectorAll('[aria-label="Workspace notebooks"] button').length === 3`);
+
+      async function selectNotebook(id, title) {
+        await until(
+          `const button = document.querySelector('[data-notebook-id="${id}"]'); return !!button && !button.disabled;`,
+        );
+        await evaluate(`document.querySelector('[data-notebook-id="${id}"]').click()`);
+        await until(
+          `return document.querySelector('[aria-label="Notebook title"]').value === ${JSON.stringify(title)}`,
+        );
+        const selected = await invoke('bootstrap', {});
+        assert.equal(selected.value.notebookId, id);
+        assert.equal(await evaluate(`return document.querySelector('[aria-current="page"]').dataset.notebookId`), id);
+        return selected.value;
+      }
+
+      const original = await selectNotebook(resumed.notebookId, 'Close flush check');
+      assert.equal(original.notebook.cells.length, 3);
+      assert.equal(await evaluate('return document.querySelectorAll(".results").length'), 0);
+      await setInput('[aria-label="Notebook title"]', 'Unsaved switch draft');
+      const different = await selectNotebook(other.notebookId, 'Other database notebook');
+      assert.equal(
+        JSON.parse(await readFile(`${original.dataDirectory}/notebook.json`, 'utf8')).title,
+        'Unsaved switch draft',
+      );
+      assert.equal(different.connectionDefaults.autoConnect, false);
+      assert.equal(different.connectionDefaults.input.database, 'postgres');
+      assert.equal(different.connectionDefaults.input.password, '');
+      assert.equal(await evaluate(`return !!document.querySelector('.connection-dot.connected')`), false);
+      const stale = await invoke('save_notebook', {
+        notebookId: original.notebookId,
+        notebook: { ...original.notebook, title: 'Stale overwrite' },
+      });
+      assert.ok(stale.error.includes('notebook changed'));
+      assert.equal(
+        JSON.parse(await readFile(`${different.dataDirectory}/notebook.json`, 'utf8')).title,
+        'Other database notebook',
+      );
+
+      await click('Connect a database');
+      await until(`return !!document.querySelector('[role=dialog]')`);
+      assert.equal(await evaluate(`return document.querySelector('input[type=password]').value`), '');
+      await click('Connect');
+      await until(
+        `return !document.querySelector('[role=dialog]') && !!document.querySelector('.connection-dot.connected')`,
+      );
+      assert.equal(
+        await evaluate(`return document.querySelector('.connection-card p').textContent`),
+        'postgres · jupsql',
+      );
+
+      const live = await openPeer({});
+      assert.equal(live.notebookId, original.notebookId);
+      await until(
+        `const button = document.querySelector('[data-notebook-id="${live.notebookId}"]'); return button?.disabled && !!button.querySelector('[aria-label="Open in another window"]');`,
+      );
+      await until(
+        `return document.querySelector('[aria-label="Workspace notebooks"] button').dataset.notebookId === '${live.notebookId}'`,
+      );
+      const busy = await invoke('open_notebook', { id: live.notebookId });
+      assert.ok(busy.error.includes('already open'));
+      assert.equal((await invoke('bootstrap', {})).value.notebookId, different.notebookId);
+      await peerEvaluate(
+        `const input = document.querySelector('[aria-label="Notebook title"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'Live peer rename'); input.dispatchEvent(new Event('input', {bubbles:true}));`,
+      );
+      await until(
+        `return document.querySelector('[data-notebook-id="${live.notebookId}"]').textContent.includes('Live peer rename')`,
+      );
+      await writeFile(
+        '.cache/validation/native-workspace.png',
+        Buffer.from(await request(`/session/${session}/screenshot`), 'base64'),
+      );
+      await closePeer();
+      await selectNotebook(live.notebookId, 'Live peer rename');
+      await until(`return !!document.querySelector('.connection-dot.connected')`);
+      assert.equal(
+        await evaluate(`return document.querySelector('.connection-card p').textContent`),
+        'jupsql_demo · jupsql',
+      );
+      const activityBefore = (await invoke('list_notebooks', {})).value.find(
+        (entry) => entry.id === live.notebookId,
+      ).lastActivity;
+      await sleep(650);
+      const activityAfter = (await invoke('list_notebooks', {})).value.find(
+        (entry) => entry.id === live.notebookId,
+      ).lastActivity;
+      assert.equal(activityAfter, activityBefore, 'an unchanged autosave must not count as activity');
+      const cached = await selectNotebook(different.notebookId, 'Other database notebook');
+      assert.equal(cached.connectionDefaults.autoConnect, true);
+      await until(`return !!document.querySelector('.connection-dot.connected')`);
+      assert.equal(
+        await evaluate(`return document.querySelector('.connection-card p').textContent`),
+        'postgres · jupsql',
+      );
+      console.log(
+        'Native workspace browser passed: listing, activity order, live updates, draft flush, stale-save rejection, busy notebooks, and safe connection switching.',
+      );
       console.log(
         'Native notebook history passed: resume, concurrent empty notebook, latest-opened selection, and separate database history.',
       );

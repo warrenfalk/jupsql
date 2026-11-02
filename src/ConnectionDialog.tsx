@@ -5,10 +5,12 @@ import type { ConnectionInput } from './model';
 
 export function ConnectionDialog({
   initialValue,
+  notebookId,
   onClose,
   onConnected,
 }: {
   initialValue: ConnectionInput;
+  notebookId: string;
   onClose: () => void;
   onConnected: (label: string, input: ConnectionInput) => void;
 }) {
@@ -20,7 +22,7 @@ export function ConnectionDialog({
     setBusy(true);
     setError(null);
     try {
-      const label = await bridge.connect(value);
+      const label = await bridge.connect(notebookId, value);
       onConnected(label, value);
       onClose();
     } catch (error) {

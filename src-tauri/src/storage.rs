@@ -35,6 +35,27 @@ struct RecentNotebook {
 struct Catalog {
     version: u32,
     recent: Vec<RecentNotebook>,
+    #[serde(default)]
+    notebooks: Vec<NotebookEntry>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NotebookEntry {
+    id: String,
+    title: String,
+    last_activity: u128,
+    modified_at: u128,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotebookSummary {
+    pub id: String,
+    pub title: String,
+    pub last_activity: u128,
+    pub is_open: bool,
+    pub connection: Option<String>,
 }
 
 impl Default for Catalog {
@@ -42,11 +63,38 @@ impl Default for Catalog {
         Self {
             version: 1,
             recent: vec![],
+            notebooks: vec![],
         }
     }
 }
 
 impl Catalog {
+    fn activity(&mut self, id: &str, title: &str, modified_at: u128) {
+        let last_activity = now_ms().max(
+            self.notebooks
+                .iter()
+                .map(|entry| entry.last_activity)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1),
+        );
+        self.notebooks.retain(|entry| entry.id != id);
+        self.notebooks.push(NotebookEntry {
+            id: id.into(),
+            title: title.into(),
+            last_activity,
+            modified_at,
+        });
+    }
+
+    fn connection(&self, id: &str) -> Option<ConnectionIdentity> {
+        self.recent
+            .iter()
+            .filter(|entry| entry.notebook_id == id)
+            .max_by_key(|entry| entry.opened_at)
+            .map(|entry| entry.connection.clone())
+    }
+
     fn remember(&mut self, notebook_id: &str, connection: &ConnectionIdentity) {
         // Serialize recency even when several processes start in the same millisecond.
         let opened_at = now_ms().max(
@@ -95,9 +143,13 @@ fn private_file(path: &Path, append: bool) -> std::io::Result<File> {
 
 fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let data = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
+    write_atomic(path, &data)
+}
+
+fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
     let temporary = path.with_extension("next");
     let mut file = private_file(&temporary, false).map_err(|error| error.to_string())?;
-    file.write_all(&data)
+    file.write_all(data)
         .and_then(|_| file.sync_all())
         .map_err(|error| error.to_string())?;
     fs::rename(temporary, path).map_err(|error| error.to_string())
@@ -124,6 +176,10 @@ fn read_catalog(root: &Path) -> Result<Catalog, String> {
     })?;
     if catalog.version != 1
         || catalog
+            .notebooks
+            .iter()
+            .any(|entry| uuid::Uuid::parse_str(&entry.id).is_err())
+        || catalog
             .recent
             .iter()
             .any(|entry| uuid::Uuid::parse_str(&entry.notebook_id).is_err())
@@ -133,6 +189,15 @@ fn read_catalog(root: &Path) -> Result<Catalog, String> {
         );
     }
     Ok(catalog)
+}
+
+fn modified_at(path: &Path) -> Result<u128, String> {
+    Ok(fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .map_err(|error| error.to_string())?
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos())
 }
 
 fn read_notebook(directory: &Path) -> Result<Notebook, String> {
@@ -152,12 +217,28 @@ fn read_notebook(directory: &Path) -> Result<Notebook, String> {
 
 impl Storage {
     pub fn new(root: PathBuf, connection: Option<ConnectionIdentity>) -> Result<Self, String> {
+        Self::select(root, connection, None)
+    }
+
+    pub fn open(root: PathBuf, id: &str) -> Result<Self, String> {
+        if uuid::Uuid::parse_str(id).is_err() {
+            return Err("Invalid notebook ID.".into());
+        }
+        Self::select(root, None, Some(id))
+    }
+
+    fn select(
+        root: PathBuf,
+        connection: Option<ConnectionIdentity>,
+        requested: Option<&str>,
+    ) -> Result<Self, String> {
         private_directory(&root)?;
         private_directory(&root.join("notebooks"))?;
         private_directory(&root.join("sessions"))?;
         // Hold this only while choosing and reserving a notebook, not for the window's lifetime.
         let catalog_lock = lock_catalog(&root)?;
         let mut catalog = read_catalog(&root)?;
+        let connection = requested.map_or(connection, |id| catalog.connection(id));
         let recent = connection.as_ref().and_then(|connection| {
             catalog
                 .recent
@@ -166,8 +247,11 @@ impl Storage {
                 .max_by_key(|entry| entry.opened_at)
         });
         let mut selected = None;
-        if let Some(recent) = recent {
-            let directory = root.join("notebooks").join(&recent.notebook_id);
+        let selected_id = requested
+            .map(str::to_owned)
+            .or_else(|| recent.map(|entry| entry.notebook_id.clone()));
+        if let Some(id) = selected_id {
+            let directory = root.join("notebooks").join(&id);
             match fs::metadata(directory.join("notebook.json")) {
                 Ok(_) => {
                     let lock = private_file(&directory.join("notebook.lock"), true)
@@ -175,13 +259,17 @@ impl Storage {
                     match lock.try_lock() {
                         Ok(()) => {
                             read_notebook(&directory)?;
-                            selected = Some((recent.notebook_id.clone(), directory, lock));
+                            selected = Some((id, directory, lock));
+                        }
+                        Err(TryLockError::WouldBlock) if requested.is_some() => {
+                            return Err("This notebook is already open in another window.".into());
                         }
                         Err(TryLockError::WouldBlock) => {}
                         Err(TryLockError::Error(error)) => return Err(error.to_string()),
                     }
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound && requested.is_none() => {}
                 Err(error) => return Err(error.to_string()),
             }
         }
@@ -202,8 +290,14 @@ impl Storage {
         };
         if let Some(connection) = &connection {
             catalog.remember(&notebook_id, connection);
-            write_json(&root.join("catalog.json"), &catalog)?;
         }
+        let notebook = read_notebook(&directory)?;
+        catalog.activity(
+            &notebook_id,
+            &notebook.title,
+            modified_at(&directory.join("notebook.json"))?,
+        );
+        write_json(&root.join("catalog.json"), &catalog)?;
         let session_id = uuid::Uuid::new_v4().to_string();
         let log_path = root
             .join("sessions")
@@ -225,6 +319,101 @@ impl Storage {
         Ok(store)
     }
 
+    pub fn id(&self) -> &str {
+        &self.notebook_id
+    }
+
+    pub fn connection_identity(&self) -> Result<Option<ConnectionIdentity>, String> {
+        self.connection
+            .lock()
+            .map(|value| value.clone())
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn list(root: &Path) -> Result<Vec<NotebookSummary>, String> {
+        let _catalog_lock = lock_catalog(root)?;
+        let mut catalog = read_catalog(root)?;
+        let mut changed = false;
+        let mut notebooks = vec![];
+        // Discover unassociated notebooks and older catalogs, caching titles until files change.
+        for directory in fs::read_dir(root.join("notebooks")).map_err(|error| error.to_string())? {
+            let directory = directory.map_err(|error| error.to_string())?;
+            let id = directory.file_name().to_string_lossy().into_owned();
+            if uuid::Uuid::parse_str(&id).is_err() {
+                continue;
+            }
+            let path = directory.path();
+            if !path.join("notebook.json").is_file() {
+                continue;
+            }
+            let modified = modified_at(&path.join("notebook.json"))?;
+            let entry = catalog.notebooks.iter().find(|entry| entry.id == id);
+            if entry.is_none_or(|entry| entry.modified_at != modified) {
+                let book = read_notebook(&path)?;
+                let last_activity = entry
+                    .map_or(0, |entry| entry.last_activity)
+                    .max(modified / 1_000_000)
+                    .max(
+                        catalog
+                            .recent
+                            .iter()
+                            .filter(|entry| entry.notebook_id == id)
+                            .map(|entry| entry.opened_at)
+                            .max()
+                            .unwrap_or(0),
+                    );
+                catalog.notebooks.retain(|entry| entry.id != id);
+                catalog.notebooks.push(NotebookEntry {
+                    id: id.clone(),
+                    title: book.title,
+                    last_activity,
+                    modified_at: modified,
+                });
+                changed = true;
+            }
+            let lock = private_file(&path.join("notebook.lock"), true)
+                .map_err(|error| error.to_string())?;
+            let is_open = match lock.try_lock() {
+                Ok(()) => false,
+                Err(TryLockError::WouldBlock) => true,
+                Err(TryLockError::Error(error)) => return Err(error.to_string()),
+            };
+            let entry = catalog
+                .notebooks
+                .iter()
+                .find(|entry| entry.id == id)
+                .unwrap();
+            notebooks.push(NotebookSummary {
+                id: id.clone(),
+                title: entry.title.clone(),
+                last_activity: entry.last_activity,
+                is_open,
+                connection: catalog.connection(&id).map(|identity| identity.label()),
+            });
+        }
+        if changed {
+            write_json(&root.join("catalog.json"), &catalog)?;
+        }
+        notebooks.sort_by(|a, b| {
+            b.last_activity
+                .cmp(&a.last_activity)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        Ok(notebooks)
+    }
+
+    pub fn mark_activity(&self) -> Result<(), String> {
+        let _catalog_lock = lock_catalog(&self.root)?;
+        let mut catalog = read_catalog(&self.root)?;
+        let book = read_notebook(&self.directory)?;
+        catalog.activity(
+            &self.notebook_id,
+            &book.title,
+            modified_at(&self.directory.join("notebook.json"))?,
+        );
+        write_json(&self.root.join("catalog.json"), &catalog)
+    }
+
     pub fn associate_connection(&self, connection: ConnectionIdentity) -> Result<(), String> {
         let mut current = self.connection.lock().map_err(|error| error.to_string())?;
         if current.as_ref() == Some(&connection) {
@@ -233,6 +422,12 @@ impl Storage {
         let _catalog_lock = lock_catalog(&self.root)?;
         let mut catalog = read_catalog(&self.root)?;
         catalog.remember(&self.notebook_id, &connection);
+        let book = read_notebook(&self.directory)?;
+        catalog.activity(
+            &self.notebook_id,
+            &book.title,
+            modified_at(&self.directory.join("notebook.json"))?,
+        );
         write_json(&self.root.join("catalog.json"), &catalog)?;
         *current = Some(connection);
         Ok(())
@@ -265,7 +460,11 @@ impl Storage {
             return Err("Notebook exceeds the 2 MB prototype limit.".into());
         }
         let _lock = self.save_lock.lock().map_err(|error| error.to_string())?;
-        write_json(&self.directory.join("notebook.json"), notebook)?;
+        let path = self.directory.join("notebook.json");
+        if fs::read(&path).map_err(|error| error.to_string())? != data {
+            write_atomic(&path, &data)?;
+            self.mark_activity()?;
+        }
         self.record(
             "notebook_saved",
             serde_json::to_value(notebook).map_err(|error| error.to_string())?,
@@ -299,6 +498,79 @@ mod tests {
                 ..Notebook::empty()
             })
             .unwrap();
+    }
+
+    #[test]
+    fn lists_all_notebooks_by_activity_without_changing_startup_recency() {
+        let root = root();
+        let first = Storage::new(root.clone(), Some(connection("one"))).unwrap();
+        save_title(&first, "First");
+        let second = Storage::new(root.clone(), Some(connection("one"))).unwrap();
+        save_title(&second, "Second");
+        let second_id = second.id().to_owned();
+        let listed = Storage::list(&root).unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].title, "Second");
+        assert!(listed.iter().all(|entry| entry.is_open));
+        first.save(&first.load().unwrap().unwrap()).unwrap();
+        assert_eq!(
+            Storage::list(&root).unwrap()[0].id,
+            second_id,
+            "unchanged autosaves must not reorder notebooks"
+        );
+        first.mark_activity().unwrap();
+        assert_eq!(Storage::list(&root).unwrap()[0].title, "First");
+        save_title(&first, "Renamed first");
+        assert_eq!(Storage::list(&root).unwrap()[0].title, "Renamed first");
+        drop(second);
+        let reopened = Storage::new(root.clone(), Some(connection("one"))).unwrap();
+        assert_eq!(
+            reopened.id(),
+            second_id,
+            "startup uses last opened, not last activity"
+        );
+        drop((first, reopened));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn discovers_unassociated_notebooks_from_older_catalogs() {
+        let root = root();
+        let store = Storage::new(root.clone(), None).unwrap();
+        save_title(&store, "Recovered history");
+        let id = store.id().to_owned();
+        drop(store);
+        fs::write(root.join("catalog.json"), r#"{"version":1,"recent":[]}"#).unwrap();
+        let listed = Storage::list(&root).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, id);
+        assert_eq!(listed[0].title, "Recovered history");
+        assert!(!listed[0].is_open);
+        assert!(listed[0].connection.is_none());
+        assert_eq!(read_catalog(&root).unwrap().notebooks.len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_open_uses_the_selected_notebook_and_rejects_busy_or_invalid_ids() {
+        let root = root();
+        let first = Storage::new(root.clone(), Some(connection("one"))).unwrap();
+        save_title(&first, "Selected");
+        let second = Storage::new(root.clone(), Some(connection("two"))).unwrap();
+        let id = first.id().to_owned();
+        assert!(Storage::open(root.clone(), &id).is_err());
+        assert!(Storage::open(root.clone(), "../notebook").is_err());
+        assert!(Storage::open(root.clone(), &uuid::Uuid::new_v4().to_string()).is_err());
+        assert_eq!(Storage::list(&root).unwrap().len(), 2);
+        drop(first);
+        let selected = Storage::open(root.clone(), &id).unwrap();
+        assert_eq!(selected.load().unwrap().unwrap().title, "Selected");
+        assert_eq!(
+            selected.connection_identity().unwrap(),
+            Some(connection("one"))
+        );
+        drop((selected, second));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

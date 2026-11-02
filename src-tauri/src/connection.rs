@@ -39,6 +39,37 @@ enum IdentityHost {
 }
 
 impl ConnectionIdentity {
+    pub fn input(&self) -> ConnectionInput {
+        let endpoint = self.endpoints.first();
+        let port = endpoint.map_or(5432, |endpoint| endpoint.port);
+        let host = match endpoint.and_then(|endpoint| endpoint.host.as_ref()) {
+            Some(IdentityHost::Tcp(host)) => host.clone(),
+            Some(IdentityHost::Unix(path)) => path
+                .join(format!(".s.PGSQL.{port}"))
+                .to_string_lossy()
+                .into_owned(),
+            None => endpoint
+                .and_then(|endpoint| endpoint.address.clone())
+                .unwrap_or_else(|| "localhost".into()),
+        };
+        ConnectionInput {
+            host,
+            port,
+            database: self.database.clone(),
+            user: self.user.clone(),
+            password: String::new(),
+            tls: false,
+        }
+    }
+
+    pub fn label(&self) -> String {
+        let input = self.input();
+        format!(
+            "{} · {} @ {}:{}",
+            input.database, input.user, input.host, input.port
+        )
+    }
+
     pub fn from_config(config: &Config) -> Self {
         let count = config
             .get_hosts()
@@ -157,7 +188,7 @@ fn parse_database_url(url: &str) -> Result<Config, String> {
     Ok(config)
 }
 
-fn profile(config: &Config) -> Result<ConnectionInput, String> {
+pub(crate) fn profile(config: &Config) -> Result<ConnectionInput, String> {
     let host = match config.get_hosts().first() {
         Some(Host::Tcp(host)) => host.clone(),
         #[cfg(unix)]

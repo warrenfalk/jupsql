@@ -4,45 +4,150 @@ pub mod database;
 pub mod model;
 pub mod storage;
 
+use connection::{ConnectionDefaults, ConnectionIdentity};
 use model::{Analysis, ConnectionInput, Notebook, RunResult};
 use serde::Serialize;
 use serde_json::{Value, json};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
 
+#[derive(Clone)]
+struct Workspace {
+    storage: Arc<storage::Storage>,
+    defaults: ConnectionDefaults,
+}
+
+impl Workspace {
+    fn bootstrap(&self) -> Result<Bootstrap, String> {
+        Ok(Bootstrap {
+            notebook: self.storage.load()?,
+            notebook_id: self.storage.id().into(),
+            session_id: self.storage.session_id.clone(),
+            log_path: self.storage.log_path.display().to_string(),
+            data_directory: self.storage.directory.display().to_string(),
+            connection_defaults: self.defaults.clone(),
+        })
+    }
+}
+
 struct AppState {
-    storage: storage::Storage,
+    root: PathBuf,
+    workspace: Mutex<Workspace>,
     database: database::Database,
-    connection_defaults: connection::ConnectionDefaults,
+    navigation: tokio::sync::Mutex<()>,
+    known_connections: Mutex<Vec<(ConnectionIdentity, tokio_postgres::Config)>>,
+}
+
+impl AppState {
+    fn workspace(&self) -> Result<Workspace, String> {
+        self.workspace
+            .lock()
+            .map(|workspace| workspace.clone())
+            .map_err(|error| error.to_string())
+    }
+
+    fn notebook(&self, id: &str) -> Result<Workspace, String> {
+        let workspace = self.workspace()?;
+        if workspace.storage.id() != id {
+            return Err(
+                "The notebook changed. Please retry the action in the current notebook.".into(),
+            );
+        }
+        Ok(workspace)
+    }
+
+    async fn open(&self, current_id: &str, id: &str) -> Result<Bootstrap, String> {
+        let _navigation = self.navigation.try_lock().map_err(|_| {
+            "Wait for the current query or connection attempt before switching notebooks."
+                .to_string()
+        })?;
+        let current = self.notebook(current_id)?;
+        if current_id == id {
+            return current.bootstrap();
+        }
+        current
+            .storage
+            .record("notebook_switch_requested", json!({"notebookId": id}))?;
+        let storage = Arc::new(storage::Storage::open(self.root.clone(), id)?);
+        let identity = storage.connection_identity()?;
+        let cached = self
+            .known_connections
+            .lock()
+            .map_err(|error| error.to_string())?
+            .iter()
+            .find(|(known, _)| Some(known) == identity.as_ref())
+            .map(|(_, config)| config.clone());
+        let defaults = if let Some(config) = cached {
+            ConnectionDefaults {
+                input: connection::profile(&config)?,
+                auto_connect: true,
+                error: None,
+                config: Some(config),
+            }
+        } else {
+            let input =
+                identity
+                    .as_ref()
+                    .map(ConnectionIdentity::input)
+                    .unwrap_or(ConnectionInput {
+                        host: "localhost".into(),
+                        port: 5432,
+                        database: "postgres".into(),
+                        user: "postgres".into(),
+                        password: String::new(),
+                        tls: false,
+                    });
+            ConnectionDefaults {
+                input,
+                auto_connect: false,
+                error: None,
+                config: None,
+            }
+        };
+        let next = Workspace { storage, defaults };
+        let bootstrap = next.bootstrap()?;
+        *self
+            .database
+            .connection
+            .lock()
+            .map_err(|error| error.to_string())? = None;
+        *self.workspace.lock().map_err(|error| error.to_string())? = next;
+        Ok(bootstrap)
+    }
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Bootstrap {
     notebook: Option<Notebook>,
+    notebook_id: String,
     session_id: String,
     log_path: String,
     data_directory: String,
+    connection_defaults: ConnectionDefaults,
 }
 
 #[tauri::command]
 fn bootstrap(state: State<AppState>) -> Result<Bootstrap, String> {
-    Ok(Bootstrap {
-        notebook: state.storage.load()?,
-        session_id: state.storage.session_id.clone(),
-        log_path: state.storage.log_path.display().to_string(),
-        data_directory: state.storage.directory.display().to_string(),
-    })
+    state.workspace()?.bootstrap()
 }
 
 #[tauri::command]
-fn connection_defaults(state: State<AppState>) -> Result<connection::ConnectionDefaults, String> {
-    let defaults = state.connection_defaults.clone();
-    if defaults.auto_connect {
-        let input = &defaults.input;
-        state.storage.record("connection_environment", json!({ "host": input.host, "port": input.port, "database": input.database, "user": input.user, "tls": input.tls, "error": defaults.error }))?;
-    }
-    Ok(defaults)
+fn list_notebooks(state: State<AppState>) -> Result<Vec<storage::NotebookSummary>, String> {
+    storage::Storage::list(&state.root)
+}
+
+#[tauri::command]
+async fn open_notebook(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    id: String,
+) -> Result<Bootstrap, String> {
+    state.open(&notebook_id, &id).await
 }
 
 #[tauri::command]
@@ -51,60 +156,90 @@ fn analyze_notebook(notebook: Notebook) -> Vec<Analysis> {
 }
 
 #[tauri::command]
-fn save_notebook(state: State<AppState>, notebook: Notebook) -> Result<(), String> {
-    state.storage.save(&notebook)
+fn save_notebook(
+    state: State<AppState>,
+    notebook_id: String,
+    notebook: Notebook,
+) -> Result<(), String> {
+    state.notebook(&notebook_id)?.storage.save(&notebook)
 }
 
 #[tauri::command]
 async fn connect_database(
     state: State<'_, AppState>,
+    notebook_id: String,
     input: ConnectionInput,
 ) -> Result<String, String> {
+    let _navigation = state
+        .navigation
+        .try_lock()
+        .map_err(|_| "Wait for the current operation before changing connections.".to_string())?;
+    let workspace = state.notebook(&notebook_id)?;
     let config =
         connection::resolve(input.clone()).map(|resolved| database::configuration(&resolved));
-    establish_connection(&state, &input, config).await
+    establish_connection(&state, &workspace, &input, config).await
 }
 
 #[tauri::command]
-async fn connect_environment(state: State<'_, AppState>) -> Result<String, String> {
-    let defaults = state.connection_defaults.clone();
+async fn connect_environment(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<String, String> {
+    let _navigation = state
+        .navigation
+        .try_lock()
+        .map_err(|_| "Wait for the current operation before changing connections.".to_string())?;
+    let workspace = state.notebook(&notebook_id)?;
+    let defaults = workspace.defaults.clone();
     let config = defaults.config.ok_or_else(|| {
         defaults
             .error
             .unwrap_or_else(|| "Could not read connection settings.".into())
     });
-    establish_connection(&state, &defaults.input, config).await
+    establish_connection(&state, &workspace, &defaults.input, config).await
 }
 
 async fn establish_connection(
     state: &AppState,
+    workspace: &Workspace,
     input: &ConnectionInput,
     config: Result<tokio_postgres::Config, String>,
 ) -> Result<String, String> {
-    if state
-        .database
-        .active
-        .lock()
-        .map_err(|e| e.to_string())?
-        .is_some()
-    {
-        return Err("Wait for the current run before changing connections.".into());
-    }
     let result = match &config {
         Ok(config) => database::test_config(config).await,
         Err(error) => Err(error.clone()),
     };
-    state.storage.record("connection_attempt", json!({ "host": input.host, "port": input.port, "database": input.database, "user": input.user, "tls": input.tls, "error": result.as_ref().err() }))?;
+    workspace.storage.record("connection_attempt", json!({ "host": input.host, "port": input.port, "database": input.database, "user": input.user, "tls": input.tls, "error": result.as_ref().err() }))?;
     let label = result?;
     let config = config?;
-    state
-        .storage
-        .associate_connection(connection::ConnectionIdentity::from_config(&config))?;
+    let identity = ConnectionIdentity::from_config(&config);
+    let previous = workspace.storage.connection_identity()?;
+    workspace.storage.associate_connection(identity.clone())?;
+    if previous.as_ref() == Some(&identity) {
+        workspace.storage.mark_activity()?;
+    }
+    let defaults = ConnectionDefaults {
+        input: connection::profile(&config)?,
+        auto_connect: true,
+        error: None,
+        config: Some(config.clone()),
+    };
+    let mut known = state
+        .known_connections
+        .lock()
+        .map_err(|error| error.to_string())?;
+    known.retain(|(key, _)| key != &identity);
+    known.push((identity, config.clone()));
     *state
         .database
         .connection
         .lock()
-        .map_err(|e| e.to_string())? = Some(config);
+        .map_err(|error| error.to_string())? = Some(config);
+    state
+        .workspace
+        .lock()
+        .map_err(|error| error.to_string())?
+        .defaults = defaults;
     Ok(label)
 }
 
@@ -112,28 +247,50 @@ async fn establish_connection(
 async fn run_cells(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
+    notebook_id: String,
     request: database::RunRequest,
 ) -> Result<RunResult, String> {
-    database::execute(&state.database, &state.storage, request, |progress| {
+    let _navigation = state
+        .navigation
+        .try_lock()
+        .map_err(|_| "Wait for the current operation before running queries.".to_string())?;
+    let workspace = state.notebook(&notebook_id)?;
+    let mut result = database::execute(&state.database, &workspace.storage, request, |progress| {
         let _ = app.emit("run-progress", progress);
     })
-    .await
+    .await?;
+    if let Err(error) = workspace.storage.mark_activity() {
+        result.logging_error = Some(error);
+    }
+    Ok(result)
 }
 
 #[tauri::command]
-async fn cancel_run(state: State<'_, AppState>) -> Result<(), String> {
-    state.storage.record("cancel_requested", json!({}))?;
+async fn cancel_run(state: State<'_, AppState>, notebook_id: String) -> Result<(), String> {
+    state
+        .notebook(&notebook_id)?
+        .storage
+        .record("cancel_requested", json!({}))?;
     database::cancel(&state.database).await
 }
 
 #[tauri::command]
-fn record_event(state: State<AppState>, event: String, data: Value) -> Result<(), String> {
-    state.storage.record(&format!("ui.{event}"), data)
+fn record_event(
+    state: State<AppState>,
+    notebook_id: String,
+    event: String,
+    data: Value,
+) -> Result<(), String> {
+    state
+        .notebook(&notebook_id)?
+        .storage
+        .record(&format!("ui.{event}"), data)
 }
 
 #[tauri::command]
-fn read_session_log(state: State<AppState>) -> Result<String, String> {
-    std::fs::read_to_string(&state.storage.log_path).map_err(|e| e.to_string())
+fn read_session_log(state: State<AppState>, notebook_id: String) -> Result<String, String> {
+    std::fs::read_to_string(&state.notebook(&notebook_id)?.storage.log_path)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -182,7 +339,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             bootstrap,
-            connection_defaults,
+            list_notebooks,
+            open_notebook,
             analyze_notebook,
             save_notebook,
             connect_database,
@@ -202,12 +360,16 @@ pub fn run() {
                 .config
                 .as_ref()
                 .map(connection::ConnectionIdentity::from_config);
-            let storage =
-                storage::Storage::new(directory, identity).map_err(std::io::Error::other)?;
+            let storage = Arc::new(storage::Storage::new(directory.clone(), identity).map_err(std::io::Error::other)?);
+            let input = &defaults.input;
+            storage.record("connection_environment", json!({ "host": input.host, "port": input.port, "database": input.database, "user": input.user, "tls": input.tls, "error": defaults.error })).map_err(std::io::Error::other)?;
+            let known_connections = defaults.config.as_ref().map(|config| (ConnectionIdentity::from_config(config), config.clone())).into_iter().collect();
             app.manage(AppState {
-                storage,
+                root: directory,
+                workspace: Mutex::new(Workspace { storage, defaults }),
                 database: database::Database::default(),
-                connection_defaults: defaults,
+                navigation: tokio::sync::Mutex::new(()),
+                known_connections: Mutex::new(known_connections),
             });
             #[cfg(target_os = "linux")]
             prepare_display();
@@ -228,9 +390,131 @@ pub fn run() {
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 let state = window.state::<AppState>();
-                let _ = state.storage.record("window_closed", json!({}));
+                if let Ok(workspace) = state.workspace() { let _ = workspace.storage.record("window_closed", json!({})); }
             }
         })
         .run(tauri::generate_context!())
         .expect("Could not start JupSQL");
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+
+    fn defaults(database: &str) -> ConnectionDefaults {
+        connection::environment_defaults(|name| match name {
+            "PGDATABASE" => Some(database.into()),
+            "PGUSER" => Some("test_user".into()),
+            "PGPASSWORD" => Some("session-only-password".into()),
+            _ => None,
+        })
+    }
+
+    fn state(root: PathBuf) -> AppState {
+        let defaults = defaults("one");
+        let config = defaults.config.as_ref().unwrap().clone();
+        let identity = ConnectionIdentity::from_config(&config);
+        let storage =
+            Arc::new(storage::Storage::new(root.clone(), Some(identity.clone())).unwrap());
+        AppState {
+            root,
+            workspace: Mutex::new(Workspace { storage, defaults }),
+            database: database::Database::default(),
+            navigation: tokio::sync::Mutex::new(()),
+            known_connections: Mutex::new(vec![(identity, config)]),
+        }
+    }
+
+    #[tokio::test]
+    async fn switching_scopes_requests_and_only_reuses_matching_credentials() {
+        let root = std::env::temp_dir().join(format!("jupsql-workspace-{}", uuid::Uuid::new_v4()));
+        let state = state(root.clone());
+        let current = state.workspace().unwrap();
+        let original_id = current.storage.id().to_owned();
+        current
+            .storage
+            .save(&Notebook {
+                title: "Original".into(),
+                ..Notebook::empty()
+            })
+            .unwrap();
+        drop(current);
+        let other_config = defaults("two").config.unwrap();
+        let other = storage::Storage::new(
+            root.clone(),
+            Some(ConnectionIdentity::from_config(&other_config)),
+        )
+        .unwrap();
+        let other_id = other.id().to_owned();
+        other
+            .save(&Notebook {
+                title: "Other".into(),
+                ..Notebook::empty()
+            })
+            .unwrap();
+        drop(other);
+        *state.database.connection.lock().unwrap() = state.workspace().unwrap().defaults.config;
+
+        let selected = state.open(&original_id, &other_id).await.unwrap();
+        assert_eq!(selected.notebook.unwrap().title, "Other");
+        assert!(
+            state.notebook(&original_id).is_err(),
+            "late callbacks must not address the new notebook"
+        );
+        assert!(!selected.connection_defaults.auto_connect);
+        assert_eq!(selected.connection_defaults.input.database, "two");
+        assert!(selected.connection_defaults.input.password.is_empty());
+        assert!(state.database.connection.lock().unwrap().is_none());
+
+        let original = state.open(&other_id, &original_id).await.unwrap();
+        assert_eq!(original.notebook.unwrap().title, "Original");
+        assert!(original.connection_defaults.auto_connect);
+        assert_eq!(
+            original.connection_defaults.input.password,
+            "session-only-password"
+        );
+        assert!(
+            !std::fs::read_to_string(root.join("catalog.json"))
+                .unwrap()
+                .contains("session-only-password")
+        );
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn busy_notebooks_and_running_operations_leave_the_current_workspace_intact() {
+        let root = std::env::temp_dir().join(format!("jupsql-workspace-{}", uuid::Uuid::new_v4()));
+        let state = state(root.clone());
+        let original = state.workspace().unwrap().storage.id().to_owned();
+        let other = storage::Storage::new(root.clone(), None).unwrap();
+        let other_id = other.id().to_owned();
+        assert!(
+            state
+                .open(&original, &other_id)
+                .await
+                .err()
+                .unwrap()
+                .contains("already open")
+        );
+        assert_eq!(state.workspace().unwrap().storage.id(), original);
+        drop(other);
+        let operation = state.navigation.lock().await;
+        assert!(
+            state
+                .open(&original, &other_id)
+                .await
+                .err()
+                .unwrap()
+                .contains("current query")
+        );
+        assert_eq!(state.workspace().unwrap().storage.id(), original);
+        drop(operation);
+        assert_eq!(
+            state.open(&original, &other_id).await.unwrap().notebook_id,
+            other_id
+        );
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

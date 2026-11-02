@@ -110,6 +110,10 @@ Notebook history matches resolved hosts or Unix sockets, ports, database, and us
 
 Each notebook has its own lock, so separate windows can save independently. If the most recently opened matching notebook is busy, a new notebook is created even when older matching notebooks are available. Saving or closing a window does not change its open recency. Existing legacy `notebook.json` files at the data-directory root are preserved for import; they are not assigned to an arbitrary connection.
 
+The **WORKSPACE** sidebar lists all notebooks in the current data directory, including notebooks for other connections, ordered by recent activity. Opening a notebook, changing its SQL, notes or title, connecting, and completing a query update its activity. Unchanged autosaves and closing an unchanged notebook do not reorder the list. The list refreshes every two seconds and when the window gains focus.
+
+Select an available notebook to open it in the current window. The current draft is saved first, and switching is disabled during queries or connection attempts. Notebooks open in another window are marked with a lock and cannot be selected. Query results are cleared when switching. Matching credentials from the current application session can reconnect automatically; otherwise the notebook opens disconnected with its connection fields filled in. Credentials are kept only in memory.
+
 Use **Session log** to inspect the current log, copy its path, or export it. To investigate a session, start at `run_started` for the submitted notebook and targets, follow `snapshot_acquired`, then inspect each `cell_started`/`cell_finished` and the final `run_finished`. Match events using `sessionId`, `runId`, and `cellId`. `notebook_saved` records debounced draft snapshots; focus/add/delete/reorder/import events record navigation and editing context.
 
 Logs include original and expanded SQL, snapshots, errors, durations, and row counts. They do not include result sets or connection passwords. **Literal values in SQL and notes are recorded as written.** Files are local, with owner-only permissions on Unix, and have no remote telemetry or automatic retention/deletion. Saving and logging failures appear in the UI.
@@ -130,7 +134,7 @@ The PostgreSQL integration test creates and removes a disposable cluster. It che
 
 The native desktop smoke test uses WebKitWebDriver, an isolated Xvfb display, and separate notebook directories. It checks manual connections, automatic TCP/socket connections, recovery after automatic connection failures, password exclusion, running, editing, transitive staleness, composing current SQL, reference errors, saving, and session logs. Its screenshot and session log are written under `.cache/validation/`.
 
-Build a desktop executable with `pnpm desktop:build` (or add `--debug` for a faster local build). Each application window has one notebook and connection; separate launches can open independent notebooks. Installer packaging, schema browsing, notebook browsing within a window, charts, and references to cached results are outside this prototype. The SQL parser supports a broad PostgreSQL subset; unsupported syntax is reported rather than sent unchanged.
+Build a desktop executable with `pnpm desktop:build` (or add `--debug` for a faster local build). Each application window has one notebook and connection; separate launches can open independent notebooks. Installer packaging, schema browsing, charts, and references to cached results are outside this prototype. The SQL parser supports a broad PostgreSQL subset; unsupported syntax is reported rather than sent unchanged.
 
 Implementation: React/Vite/TypeScript with CodeMirror and Tailwind in `src/`; SQL analysis/expansion in `src-tauri/src/compiler.rs`; database transactions and cancellation in `database.rs`; local persistence and JSONL recording in `storage.rs`.
 

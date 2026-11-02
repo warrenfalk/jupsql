@@ -86,6 +86,12 @@ kbd {
   color: #939ca9;
   padding: 0 11px;
 }
+.notebook-list {
+  margin: 12px 0 24px;
+  max-height: 30vh;
+  min-height: 40px;
+  overflow: auto;
+}
 .notebook-nav {
   display: flex;
   align-items: center;
@@ -93,14 +99,41 @@ kbd {
   padding: 11px;
   width: 100%;
   border-radius: 7px;
-  background: #e2e8e9;
-  color: #216b60;
-  margin: 12px 0 29px;
+  color: #667184;
   font-weight: 600;
   text-align: left;
 }
-.notebook-nav span {
+.notebook-nav.selected {
+  background: #e2e8e9;
+  color: #216b60;
+}
+.notebook-nav:hover:not(:disabled) {
+  background: #e7ebee;
+}
+.notebook-nav > svg {
+  flex-shrink: 0;
+}
+.notebook-info {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.notebook-info small {
+  font-size: 9px;
+  font-weight: 400;
+  color: #8b95a4;
+}
+.workspace-error,
+.workspace-status {
+  font-size: 11px;
+  padding: 0 11px;
+  margin-bottom: 14px;
+  color: #8b95a4;
+}
+.workspace-error {
+  color: #b46961;
 }
 .outline-heading {
   display: flex;

@@ -19,10 +19,19 @@ export type ConnectionInput = {
 export type ConnectionDefaults = { input: ConnectionInput; autoConnect: boolean; error: string | null };
 export type Bootstrap = {
   notebook: Notebook | null;
+  notebookId: string;
   sessionId: string;
   logPath: string;
   dataDirectory: string;
   connectionDefaults: ConnectionDefaults;
+};
+
+export type NotebookSummary = {
+  id: string;
+  title: string;
+  lastActivity: number;
+  isOpen: boolean;
+  connection: string | null;
 };
 export type CellResult = {
   cellId: string;
