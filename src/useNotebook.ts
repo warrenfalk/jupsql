@@ -205,7 +205,7 @@ export function useNotebook(initial: Notebook, defaults: ConnectionDefaults, not
     }
   }
 
-  async function openNotebook(id: string): Promise<Bootstrap | null> {
+  async function openNotebook(id: string | null): Promise<Bootstrap | null> {
     if (id === notebookId || switchingLock.current || runLock.current || autoConnecting || closing.current) return null;
     switchingLock.current = true;
     setSwitching(true);
@@ -213,7 +213,7 @@ export function useNotebook(initial: Notebook, defaults: ConnectionDefaults, not
       await saveQueue.current.catch(() => {});
       await bridge.save(notebookId, latestNotebook.current);
       setSaveState('Saved locally');
-      return await bridge.openNotebook(notebookId, id);
+      return await (id === null ? bridge.createNotebook(notebookId) : bridge.openNotebook(notebookId, id));
     } catch (error) {
       switchingLock.current = false;
       setSwitching(false);

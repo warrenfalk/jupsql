@@ -595,6 +595,25 @@ try {
       console.log(
         'Native workspace browser passed: listing, activity order, live updates, draft flush, stale-save rejection, busy notebooks, and safe connection switching.',
       );
+      await setInput('[aria-label="Notebook title"]', 'Draft before creation');
+      await click('New notebook');
+      await until(`return document.querySelector('[aria-label="Notebook title"]').value === 'Untitled notebook'`);
+      const created = (await invoke('bootstrap', {})).value;
+      assert.notEqual(created.notebookId, different.notebookId);
+      assert.equal(created.notebook.cells.length, 0);
+      assert.equal(await evaluate('return document.querySelectorAll(".cell-card").length'), 0);
+      assert.equal(created.connectionDefaults.input.database, 'postgres');
+      await until(`return !!document.querySelector('.connection-dot.connected')`);
+      assert.equal(
+        JSON.parse(await readFile(`${different.dataDirectory}/notebook.json`, 'utf8')).title,
+        'Draft before creation',
+      );
+      await until(`return document.querySelectorAll('[aria-label="Workspace notebooks"] button').length === 4`);
+      assert.equal((await invoke('list_notebooks', {})).value[0].id, created.notebookId);
+      await selectNotebook(different.notebookId, 'Draft before creation');
+      console.log(
+        'Native notebook creation passed: empty notebook, draft flush, current connection, activity order, and reopening previous notebook.',
+      );
       console.log(
         'Native notebook history passed: resume, concurrent empty notebook, latest-opened selection, and separate database history.',
       );

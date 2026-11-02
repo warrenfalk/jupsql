@@ -23,6 +23,12 @@ pub struct Storage {
     _instance_lock: File,
 }
 
+enum Selection<'a> {
+    Recent,
+    Open(&'a str),
+    New,
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RecentNotebook {
@@ -217,20 +223,24 @@ fn read_notebook(directory: &Path) -> Result<Notebook, String> {
 
 impl Storage {
     pub fn new(root: PathBuf, connection: Option<ConnectionIdentity>) -> Result<Self, String> {
-        Self::select(root, connection, None)
+        Self::select(root, connection, Selection::Recent)
+    }
+
+    pub fn create(root: PathBuf, connection: Option<ConnectionIdentity>) -> Result<Self, String> {
+        Self::select(root, connection, Selection::New)
     }
 
     pub fn open(root: PathBuf, id: &str) -> Result<Self, String> {
         if uuid::Uuid::parse_str(id).is_err() {
             return Err("Invalid notebook ID.".into());
         }
-        Self::select(root, None, Some(id))
+        Self::select(root, None, Selection::Open(id))
     }
 
     fn select(
         root: PathBuf,
         connection: Option<ConnectionIdentity>,
-        requested: Option<&str>,
+        selection: Selection<'_>,
     ) -> Result<Self, String> {
         private_directory(&root)?;
         private_directory(&root.join("notebooks"))?;
@@ -238,6 +248,10 @@ impl Storage {
         // Hold this only while choosing and reserving a notebook, not for the window's lifetime.
         let catalog_lock = lock_catalog(&root)?;
         let mut catalog = read_catalog(&root)?;
+        let requested = match selection {
+            Selection::Open(id) => Some(id),
+            _ => None,
+        };
         let connection = requested.map_or(connection, |id| catalog.connection(id));
         let recent = connection.as_ref().and_then(|connection| {
             catalog
@@ -247,9 +261,11 @@ impl Storage {
                 .max_by_key(|entry| entry.opened_at)
         });
         let mut selected = None;
-        let selected_id = requested
-            .map(str::to_owned)
-            .or_else(|| recent.map(|entry| entry.notebook_id.clone()));
+        let selected_id = match selection {
+            Selection::Open(id) => Some(id.to_owned()),
+            Selection::Recent => recent.map(|entry| entry.notebook_id.clone()),
+            Selection::New => None,
+        };
         if let Some(id) = selected_id {
             let directory = root.join("notebooks").join(&id);
             match fs::metadata(directory.join("notebook.json")) {

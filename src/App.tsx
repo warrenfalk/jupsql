@@ -90,6 +90,18 @@ function NotebookWorkspace({ initial, onOpened }: { initial: Bootstrap; onOpened
           <span>JupSQL</span>
         </div>
         <div className="sidebar-section-label">WORKSPACE</div>
+        <button
+          className="sidebar-add"
+          disabled={!bridge.desktop || state.switching || state.busy || state.autoConnecting || connecting}
+          onClick={() => {
+            void state.openNotebook(null).then((next) => {
+              if (next) onOpened(next);
+            });
+          }}
+        >
+          <Plus size={14} />
+          New notebook
+        </button>
         <nav className="notebook-list" aria-label="Workspace notebooks">
           {notebooks.map((notebook) => {
             const current = notebook.id === initial.notebookId;

@@ -61,18 +61,32 @@ impl AppState {
     }
 
     async fn open(&self, current_id: &str, id: &str) -> Result<Bootstrap, String> {
+        self.navigate(current_id, Some(id)).await
+    }
+
+    async fn navigate(&self, current_id: &str, id: Option<&str>) -> Result<Bootstrap, String> {
         let _navigation = self.navigation.try_lock().map_err(|_| {
             "Wait for the current query or connection attempt before switching notebooks."
                 .to_string()
         })?;
         let current = self.notebook(current_id)?;
-        if current_id == id {
+        if Some(current_id) == id {
             return current.bootstrap();
         }
-        current
-            .storage
-            .record("notebook_switch_requested", json!({"notebookId": id}))?;
-        let storage = Arc::new(storage::Storage::open(self.root.clone(), id)?);
+        current.storage.record(
+            if id.is_some() {
+                "notebook_switch_requested"
+            } else {
+                "notebook_create_requested"
+            },
+            json!({"notebookId": id}),
+        )?;
+        let storage = Arc::new(match id {
+            Some(id) => storage::Storage::open(self.root.clone(), id)?,
+            None => {
+                storage::Storage::create(self.root.clone(), current.storage.connection_identity()?)?
+            }
+        });
         let identity = storage.connection_identity()?;
         let cached = self
             .known_connections
@@ -148,6 +162,14 @@ async fn open_notebook(
     id: String,
 ) -> Result<Bootstrap, String> {
     state.open(&notebook_id, &id).await
+}
+
+#[tauri::command]
+async fn create_notebook(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> Result<Bootstrap, String> {
+    state.navigate(&notebook_id, None).await
 }
 
 #[tauri::command]
@@ -341,6 +363,7 @@ pub fn run() {
             bootstrap,
             list_notebooks,
             open_notebook,
+            create_notebook,
             analyze_notebook,
             save_notebook,
             connect_database,
@@ -423,6 +446,50 @@ mod workspace_tests {
             navigation: tokio::sync::Mutex::new(()),
             known_connections: Mutex::new(vec![(identity, config)]),
         }
+    }
+
+    #[tokio::test]
+    async fn creating_is_empty_preserves_history_and_reuses_current_connection() {
+        let root = std::env::temp_dir().join(format!("jupsql-create-{}", uuid::Uuid::new_v4()));
+        let state = state(root.clone());
+        let current = state.workspace().unwrap();
+        let original = current.storage.id().to_owned();
+        current
+            .storage
+            .save(&Notebook {
+                title: "Keep me".into(),
+                ..Notebook::empty()
+            })
+            .unwrap();
+        drop(current);
+        let operation = state.navigation.lock().await;
+        assert!(state.navigate(&original, None).await.is_err());
+        drop(operation);
+        let created = state.navigate(&original, None).await.unwrap();
+        assert_ne!(created.notebook_id, original);
+        assert!(created.notebook.unwrap().cells.is_empty());
+        assert!(created.connection_defaults.auto_connect);
+        assert_eq!(created.connection_defaults.input.database, "one");
+        assert_eq!(
+            created.connection_defaults.input.password,
+            "session-only-password"
+        );
+        assert!(state.navigate(&original, None).await.is_err());
+        assert_eq!(storage::Storage::list(&root).unwrap().len(), 2);
+        let restored = state.open(&created.notebook_id, &original).await.unwrap();
+        assert_eq!(restored.notebook.unwrap().title, "Keep me");
+        drop(state);
+        // Explicit creation must not resume the now-unlocked recent notebook.
+        let identity = ConnectionIdentity::from_config(&defaults("one").config.unwrap());
+        let fresh = storage::Storage::create(root.clone(), Some(identity.clone())).unwrap();
+        let fresh_id = fresh.id().to_owned();
+        assert_ne!(fresh_id, original);
+        assert!(fresh.load().unwrap().unwrap().cells.is_empty());
+        drop(fresh);
+        let resumed = storage::Storage::new(root.clone(), Some(identity)).unwrap();
+        assert_eq!(resumed.id(), fresh_id);
+        drop(resumed);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

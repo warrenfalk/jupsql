@@ -32,6 +32,7 @@ export const cancel = (notebookId: string) => invoke<void>('cancel_run', { noteb
 export const sessionLog = (notebookId: string) => invoke<string>('read_session_log', { notebookId });
 export const listNotebooks = () => invoke<NotebookSummary[]>('list_notebooks');
 export const openNotebook = (notebookId: string, id: string) => invoke<Bootstrap>('open_notebook', { notebookId, id });
+export const createNotebook = (notebookId: string) => invoke<Bootstrap>('create_notebook', { notebookId });
 export const exportFile = (name: string, contents: string) => invoke<boolean>('export_file', { name, contents });
 export const record = (notebookId: string, event: string, data: Record<string, unknown>) =>
   desktop ? invoke<void>('record_event', { notebookId, event, data }) : Promise.resolve();
