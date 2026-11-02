@@ -124,13 +124,29 @@ try {
   );
   await click('Add query');
   await until('return document.querySelectorAll(".cell-card").length === 1');
+  await until(`return document.activeElement?.getAttribute('aria-label') === 'query_1 SQL'`);
   assert.equal(await evaluate(`return document.querySelector('[aria-label="query_1 SQL"]').innerText.trim()`), '');
   assert.equal(await evaluate(`return document.querySelector('[aria-label="query_1 notes"]').value`), '');
   assert.equal(await evaluate('return document.body.innerText.includes("Notebook guide")'), false);
-  await click('Add query');
+  await click('Add a query cell');
   await until('return document.querySelectorAll(".cell-card").length === 2');
+  await until(`return document.activeElement?.getAttribute('aria-label') === 'query_2 SQL'`);
   assert.equal(await evaluate(`return document.querySelector('[aria-label="query_2 SQL"]').innerText.trim()`), '');
   assert.equal(await evaluate(`return document.querySelector('[aria-label="query_2 notes"]').value`), '');
+  await request(`/session/${session}/actions`, 'POST', {
+    actions: [
+      {
+        type: 'key',
+        id: 'keyboard',
+        actions: [...'SELECT 1;'].flatMap((value) => [
+          { type: 'keyDown', value },
+          { type: 'keyUp', value },
+        ]),
+      },
+    ],
+  });
+  await until(`return document.querySelector('[aria-label="query_2 SQL"]').innerText.trim() === 'SELECT 1;'`);
+  assert.equal(await evaluate(`return document.querySelector('[aria-label="query_1 SQL"]').innerText.trim()`), '');
   const fixture = JSON.parse(await readFile(new URL('./fixtures/notebook.json', import.meta.url), 'utf8'));
   await evaluate(
     `const input = document.querySelector('[aria-label="Notebook file"]');

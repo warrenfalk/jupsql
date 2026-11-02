@@ -46,10 +46,11 @@ export function App({ initial }: { initial: Bootstrap }) {
     const cell = newCell(index);
     state.change({ ...state.notebook, cells: [...state.notebook.cells, cell] }, new Set());
     state.log('cell_added', { cellId: cell.id });
-    setTimeout(
-      () => document.getElementById(`cell-${cell.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }),
-      0,
-    );
+    setTimeout(() => {
+      const element = document.getElementById(`cell-${cell.id}`);
+      element?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      element?.querySelector<HTMLElement>('.cm-content')?.focus({ preventScroll: true });
+    }, 0);
   }
 
   function focusCell(id: string) {
