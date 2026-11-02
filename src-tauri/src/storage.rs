@@ -512,6 +512,33 @@ mod tests {
     }
 
     #[test]
+    fn adding_and_deleting_queries_count_as_activity_but_reading_does_not() {
+        let root = root();
+        let store = Storage::new(root.clone(), None).unwrap();
+        let mut notebook = store.load().unwrap().unwrap();
+        let initial = Storage::list(&root).unwrap()[0].last_activity;
+        notebook.cells.push(crate::model::Cell {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "query_1".into(),
+            kind: crate::model::CellKind::Query,
+            sql: String::new(),
+            notes: String::new(),
+        });
+        store.save(&notebook).unwrap();
+        let added = Storage::list(&root).unwrap()[0].last_activity;
+        assert!(added > initial, "adding even an empty query is activity");
+        notebook.cells.clear();
+        store.save(&notebook).unwrap();
+        let deleted = Storage::list(&root).unwrap()[0].last_activity;
+        assert!(deleted > added, "deleting the last query is activity");
+        let unchanged = store.load().unwrap().unwrap();
+        store.save(&unchanged).unwrap();
+        assert_eq!(Storage::list(&root).unwrap()[0].last_activity, deleted);
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn lists_all_notebooks_by_activity_without_changing_startup_recency() {
         let root = root();
         let first = Storage::new(root.clone(), Some(connection("one"))).unwrap();
