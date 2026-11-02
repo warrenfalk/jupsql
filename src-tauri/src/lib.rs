@@ -199,7 +199,9 @@ async fn connect_database(
     let workspace = state.notebook(&notebook_id)?;
     let config =
         connection::resolve(input.clone()).map(|resolved| database::configuration(&resolved));
-    establish_connection(&state, &workspace, &input, config).await
+    let label = establish_connection(&state, &workspace, &input, config).await?;
+    workspace.storage.mark_activity()?;
+    Ok(label)
 }
 
 #[tauri::command]
@@ -235,11 +237,7 @@ async fn establish_connection(
     let label = result?;
     let config = config?;
     let identity = ConnectionIdentity::from_config(&config);
-    let previous = workspace.storage.connection_identity()?;
     workspace.storage.associate_connection(identity.clone())?;
-    if previous.as_ref() == Some(&identity) {
-        workspace.storage.mark_activity()?;
-    }
     let defaults = ConnectionDefaults {
         input: connection::profile(&config)?,
         auto_connect: true,

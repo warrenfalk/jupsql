@@ -501,6 +501,7 @@ try {
       await until(`return document.querySelectorAll('[aria-label="Workspace notebooks"] button').length === 3`);
 
       async function selectNotebook(id, title) {
+        const activity = (await invoke('list_notebooks', {})).value.find((entry) => entry.id === id).lastActivity;
         await until(
           `const button = document.querySelector('[data-notebook-id="${id}"]'); return !!button && !button.disabled;`,
         );
@@ -511,6 +512,14 @@ try {
         const selected = await invoke('bootstrap', {});
         assert.equal(selected.value.notebookId, id);
         assert.equal(await evaluate(`return document.querySelector('[aria-current="page"]').dataset.notebookId`), id);
+        await until(
+          `return !document.querySelector('.connection-card p').textContent.includes('Connecting from environment')`,
+        );
+        assert.equal(
+          (await invoke('list_notebooks', {})).value.find((entry) => entry.id === id).lastActivity,
+          activity,
+          'opening and automatic reconnection must not count as activity',
+        );
         return selected.value;
       }
 
@@ -549,13 +558,16 @@ try {
         'postgres · jupsql',
       );
 
+      const beforePeerOpen = (await invoke('list_notebooks', {})).value;
       const live = await openPeer({});
       assert.equal(live.notebookId, original.notebookId);
       await until(
         `const button = document.querySelector('[data-notebook-id="${live.notebookId}"]'); return button?.disabled && !!button.querySelector('[aria-label="Open in another window"]');`,
       );
-      await until(
-        `return document.querySelector('[aria-label="Workspace notebooks"] button').dataset.notebookId === '${live.notebookId}'`,
+      assert.deepEqual(
+        (await invoke('list_notebooks', {})).value.map(({ id, lastActivity }) => ({ id, lastActivity })),
+        beforePeerOpen.map(({ id, lastActivity }) => ({ id, lastActivity })),
+        'opening another window must preserve activity and ordering',
       );
       const busy = await invoke('open_notebook', { id: live.notebookId });
       assert.ok(busy.error.includes('already open'));

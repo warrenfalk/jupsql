@@ -308,11 +308,21 @@ impl Storage {
             catalog.remember(&notebook_id, connection);
         }
         let notebook = read_notebook(&directory)?;
-        catalog.activity(
-            &notebook_id,
-            &notebook.title,
-            modified_at(&directory.join("notebook.json"))?,
-        );
+        let modified = modified_at(&directory.join("notebook.json"))?;
+        if !resumed {
+            catalog.activity(&notebook_id, &notebook.title, modified);
+        } else if !catalog
+            .notebooks
+            .iter()
+            .any(|entry| entry.id == notebook_id)
+        {
+            catalog.notebooks.push(NotebookEntry {
+                id: notebook_id.clone(),
+                title: notebook.title,
+                last_activity: modified / 1_000_000,
+                modified_at: modified,
+            });
+        }
         write_json(&root.join("catalog.json"), &catalog)?;
         let session_id = uuid::Uuid::new_v4().to_string();
         let log_path = root
@@ -368,16 +378,7 @@ impl Storage {
                 let book = read_notebook(&path)?;
                 let last_activity = entry
                     .map_or(0, |entry| entry.last_activity)
-                    .max(modified / 1_000_000)
-                    .max(
-                        catalog
-                            .recent
-                            .iter()
-                            .filter(|entry| entry.notebook_id == id)
-                            .map(|entry| entry.opened_at)
-                            .max()
-                            .unwrap_or(0),
-                    );
+                    .max(modified / 1_000_000);
                 catalog.notebooks.retain(|entry| entry.id != id);
                 catalog.notebooks.push(NotebookEntry {
                     id: id.clone(),
@@ -438,12 +439,6 @@ impl Storage {
         let _catalog_lock = lock_catalog(&self.root)?;
         let mut catalog = read_catalog(&self.root)?;
         catalog.remember(&self.notebook_id, &connection);
-        let book = read_notebook(&self.directory)?;
-        catalog.activity(
-            &self.notebook_id,
-            &book.title,
-            modified_at(&self.directory.join("notebook.json"))?,
-        );
         write_json(&self.root.join("catalog.json"), &catalog)?;
         *current = Some(connection);
         Ok(())
@@ -538,6 +533,7 @@ mod tests {
         assert_eq!(Storage::list(&root).unwrap()[0].title, "First");
         save_title(&first, "Renamed first");
         assert_eq!(Storage::list(&root).unwrap()[0].title, "Renamed first");
+        let activity_before = Storage::list(&root).unwrap()[1].last_activity;
         drop(second);
         let reopened = Storage::new(root.clone(), Some(connection("one"))).unwrap();
         assert_eq!(
@@ -545,7 +541,19 @@ mod tests {
             second_id,
             "startup uses last opened, not last activity"
         );
-        drop((first, reopened));
+        let listed = Storage::list(&root).unwrap();
+        assert_eq!(
+            listed[0].title, "Renamed first",
+            "opening must not reorder notebooks"
+        );
+        assert_eq!(listed[1].last_activity, activity_before);
+        drop(first);
+        let opened = Storage::open(root.clone(), &listed[0].id).unwrap();
+        assert_eq!(
+            Storage::list(&root).unwrap()[0].last_activity,
+            listed[0].last_activity
+        );
+        drop((opened, reopened));
         fs::remove_dir_all(root).unwrap();
     }
 
