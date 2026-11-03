@@ -84,6 +84,7 @@ GROUP BY customer;
 
 - References expand the **current SQL definition**, including edits that have not been executed. Results from previous runs are not inputs.
 - References work anywhere in the notebook, irrespective of visual order. Explicit aliases and ordinary SQL CTEs are supported. Missing references, cycles, duplicate names, and attempts to reference mutations produce errors.
+- Use **Insert query here** above any query to insert at that position; the new SQL editor receives focus. **Add query** appends to the end. The up/down arrows in each query header change its visual order. Inserting or moving queries is saved as activity and preserves existing results and references.
 - Editing SQL or cell types marks the affected cells and their transitive dependents stale. Renaming a cell marks its dependents stale but preserves its own result when the compiled SQL is unchanged; renaming does not clear an already stale result. Notes and cell order do not change query results. A result that arrives after its executable definition was edited remains stale.
 - **Run** executes one cell. Ctrl/Cmd+Enter runs the focused cell.
 - **Rerun dependents** refreshes the selected source cell and all its downstream query cells. Ctrl/Cmd+Shift+Enter does this from the focused query editor. **Run all queries** refreshes every query cell. Both skip mutation cells.

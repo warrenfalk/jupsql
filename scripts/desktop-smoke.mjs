@@ -200,6 +200,64 @@ try {
   });
   await until(`return document.querySelector('[aria-label="query_2 SQL"]').innerText.trim() === 'SELECT 1;'`);
   assert.equal(await evaluate(`return document.querySelector('[aria-label="query_1 SQL"]').innerText.trim()`), '');
+  const clickLabel = (label) =>
+    evaluate(`document.querySelector('[aria-label="' + arguments[0] + '"]').click()`, [label]);
+  const orderedNames = () => evaluate(`return [...document.querySelectorAll('.cell-name')].map(input => input.value)`);
+  await until(`return document.querySelector('.save-status').textContent.includes('Saved locally')`);
+  const editing = (await invoke('bootstrap', {})).value;
+  const activityBeforeInsert = (await invoke('list_notebooks', {})).value.find(
+    (entry) => entry.id === editing.notebookId,
+  ).lastActivity;
+  await clickLabel('Insert query before query_1');
+  await until(`return document.activeElement?.getAttribute('aria-label') === 'query_3 SQL'`);
+  assert.deepEqual(await orderedNames(), ['query_3', 'query_1', 'query_2']);
+  await clickLabel('Insert query before query_2');
+  await until(`return document.activeElement?.getAttribute('aria-label') === 'query_4 SQL'`);
+  assert.deepEqual(await orderedNames(), ['query_3', 'query_1', 'query_4', 'query_2']);
+  assert.equal(
+    await evaluate(`return document.querySelector('[aria-label="query_2 SQL"]').innerText.trim()`),
+    'SELECT 1;',
+  );
+  await until(`return document.querySelector('.save-status').textContent.includes('Saved locally')`);
+  const activityAfterInsert = (await invoke('list_notebooks', {})).value.find(
+    (entry) => entry.id === editing.notebookId,
+  ).lastActivity;
+  assert.ok(activityAfterInsert > activityBeforeInsert);
+  await request(`/session/${session}/window/rect`, 'POST', { width: 1000, height: 900 });
+  assert.ok(
+    await evaluate(
+      `return innerWidth <= 1150 && document.querySelector('[aria-label="Move query_4 up"]').getBoundingClientRect().width > 0`,
+    ),
+  );
+  await clickLabel('Move query_4 up');
+  assert.deepEqual(await orderedNames(), ['query_3', 'query_4', 'query_1', 'query_2']);
+  await until(`return document.querySelector('.save-status').textContent.includes('Saved locally')`);
+  await clickLabel('Move query_4 down');
+  assert.deepEqual(await orderedNames(), ['query_3', 'query_1', 'query_4', 'query_2']);
+  assert.ok(
+    await evaluate(
+      `return document.querySelector('[aria-label="Move query_3 up"]').disabled && document.querySelector('[aria-label="Move query_2 down"]').disabled`,
+    ),
+  );
+  await until(`return document.querySelector('.save-status').textContent.includes('Saved locally')`);
+  assert.ok(
+    (await invoke('list_notebooks', {})).value.find((entry) => entry.id === editing.notebookId).lastActivity >
+      activityAfterInsert,
+  );
+  assert.deepEqual(
+    (await invoke('bootstrap', {})).value.notebook.cells.map((cell) => cell.name),
+    await orderedNames(),
+  );
+  if (connectionMode === 'tcp') {
+    await writeFile(
+      '.cache/validation/native-insert.png',
+      Buffer.from(await request(`/session/${session}/screenshot`), 'base64'),
+    );
+  }
+  await request(`/session/${session}/window/rect`, 'POST', { width: 1440, height: 1100 });
+  console.log(
+    'Native query arrangement passed: insertion at the top and middle, editor focus, visible narrow-window controls, reordering, persistence, and activity.',
+  );
   const fixture = JSON.parse(await readFile(new URL('./fixtures/notebook.json', import.meta.url), 'utf8'));
   await evaluate(
     `const input = document.querySelector('[aria-label="Notebook file"]');
@@ -268,6 +326,26 @@ try {
     'return [...document.querySelectorAll(".result-bar time")].map(t => t.title.split("Snapshot ")[1])',
   );
   assert.equal(new Set(snapshots).size, 1);
+
+  const originalResults = await evaluate(
+    `return [...document.querySelectorAll('.cell-card')].map(card => [card.id, card.querySelector('.results tbody').innerText])`,
+  );
+  await clickLabel('Move orders down');
+  await clickLabel('Move orders down');
+  assert.deepEqual(await orderedNames(), ['paid_orders', 'by_customer', 'orders']);
+  await until(
+    `return !document.querySelector('[aria-label="Move orders up"]').closest('.cell-card').querySelector('.state-badge.stale') && document.querySelectorAll('.validation-error').length === 0`,
+  );
+  assert.equal(await evaluate(`return document.querySelectorAll('.state-badge.stale').length`), 0);
+  assert.deepEqual(
+    await evaluate(
+      `return [...document.querySelectorAll('.cell-card')].map(card => [card.id, card.querySelector('.results tbody').innerText]).sort()`,
+    ),
+    originalResults.sort(),
+  );
+  await clickLabel('Move orders up');
+  await clickLabel('Move orders up');
+  assert.deepEqual(await orderedNames(), ['orders', 'paid_orders', 'by_customer']);
 
   // Edit the upstream cell without running it, then run only the final cell.
   await evaluate(`const editor = document.querySelector('[aria-label="orders SQL"]'); editor.focus();`);

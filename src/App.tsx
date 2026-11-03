@@ -15,7 +15,7 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
-import { useMemo, useRef, useState } from 'react';
+import { Fragment, useMemo, useRef, useState } from 'react';
 import * as bridge from './bridge';
 import { CellCard } from './CellCard';
 import { ConnectionDialog } from './ConnectionDialog';
@@ -61,12 +61,19 @@ function NotebookWorkspace({ initial, onOpened }: { initial: Bootstrap; onOpened
     );
   }).length;
 
-  function addCell() {
+  function addCell(position: number) {
+    if (state.switching || state.notebook.cells.length >= 100) return;
     let index = state.notebook.cells.length + 1;
     while (names.includes(`query_${index}`)) index += 1;
     const cell = newCell(index);
-    state.change({ ...state.notebook, cells: [...state.notebook.cells, cell] }, new Set());
-    state.log('cell_added', { cellId: cell.id });
+    state.change(
+      {
+        ...state.notebook,
+        cells: [...state.notebook.cells.slice(0, position), cell, ...state.notebook.cells.slice(position)],
+      },
+      new Set(),
+    );
+    state.log('cell_added', { cellId: cell.id, index: position });
     setTimeout(() => {
       const element = document.getElementById(`cell-${cell.id}`);
       element?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -175,7 +182,7 @@ function NotebookWorkspace({ initial, onOpened }: { initial: Bootstrap; onOpened
         </nav>
         <button
           className="sidebar-add"
-          onClick={addCell}
+          onClick={() => addCell(state.notebook.cells.length)}
           disabled={state.switching || state.notebook.cells.length >= 100}
         >
           <Plus size={14} />
@@ -354,41 +361,55 @@ function NotebookWorkspace({ initial, onOpened }: { initial: Bootstrap; onOpened
           )}
           <div className="cells">
             {state.notebook.cells.map((cell, index) => (
-              <CellCard
-                key={cell.id}
-                cell={cell}
-                index={index}
-                count={state.notebook.cells.length}
-                names={names}
-                analysis={state.analyses.find((a) => a.id === cell.id)}
-                result={state.results[cell.id]}
-                canRun={canRun}
-                running={state.progress?.cellId === cell.id}
-                onChange={state.editCell}
-                onRun={() => void state.execute(cell.id, false)}
-                onRefresh={() => void state.execute(cell.id, true)}
-                onFocus={() => focusCell(cell.id)}
-                onDelete={() => {
-                  setDeleted({ cell, index });
-                  state.change(
-                    { ...state.notebook, cells: state.notebook.cells.filter((c) => c.id !== cell.id) },
-                    affectedIds(state.notebook, state.analyses, cell.id),
-                  );
-                  state.log('cell_deleted', { cellId: cell.id });
-                }}
-                onMove={(direction) => {
-                  const cells = [...state.notebook.cells];
-                  const other = cells[index + direction];
-                  if (!other) return;
-                  cells[index] = other;
-                  cells[index + direction] = cell;
-                  state.change({ ...state.notebook, cells }, new Set());
-                  state.log('cell_moved', { cellId: cell.id, direction });
-                }}
-              />
+              <Fragment key={cell.id}>
+                <button
+                  className="insert-cell"
+                  aria-label={`Insert query before ${cell.name}`}
+                  disabled={state.switching || state.notebook.cells.length >= 100}
+                  onClick={() => addCell(index)}
+                >
+                  <Plus size={13} />
+                  Insert query here
+                </button>
+                <CellCard
+                  cell={cell}
+                  index={index}
+                  count={state.notebook.cells.length}
+                  names={names}
+                  analysis={state.analyses.find((a) => a.id === cell.id)}
+                  result={state.results[cell.id]}
+                  canRun={canRun}
+                  running={state.progress?.cellId === cell.id}
+                  onChange={state.editCell}
+                  onRun={() => void state.execute(cell.id, false)}
+                  onRefresh={() => void state.execute(cell.id, true)}
+                  onFocus={() => focusCell(cell.id)}
+                  onDelete={() => {
+                    setDeleted({ cell, index });
+                    state.change(
+                      { ...state.notebook, cells: state.notebook.cells.filter((c) => c.id !== cell.id) },
+                      affectedIds(state.notebook, state.analyses, cell.id),
+                    );
+                    state.log('cell_deleted', { cellId: cell.id });
+                  }}
+                  onMove={(direction) => {
+                    const cells = [...state.notebook.cells];
+                    const other = cells[index + direction];
+                    if (!other) return;
+                    cells[index] = other;
+                    cells[index + direction] = cell;
+                    state.change({ ...state.notebook, cells }, new Set());
+                    state.log('cell_moved', { cellId: cell.id, direction });
+                  }}
+                />
+              </Fragment>
             ))}
           </div>
-          <button className="add-cell" onClick={addCell} disabled={state.notebook.cells.length >= 100}>
+          <button
+            className="add-cell"
+            onClick={() => addCell(state.notebook.cells.length)}
+            disabled={state.notebook.cells.length >= 100}
+          >
             <Plus size={17} />
             Add a query cell
           </button>

@@ -76,6 +76,7 @@ export function CellCard({
           <button
             className="icon-button small"
             aria-label={`Move ${cell.name} up`}
+            title="Move query up"
             disabled={index === 0}
             onClick={() => onMove(-1)}
           >
@@ -84,6 +85,7 @@ export function CellCard({
           <button
             className="icon-button small"
             aria-label={`Move ${cell.name} down`}
+            title="Move query down"
             disabled={index === count - 1}
             onClick={() => onMove(1)}
           >

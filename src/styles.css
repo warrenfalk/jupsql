@@ -404,7 +404,21 @@ kbd {
 .cells {
   display: flex;
   flex-direction: column;
-  gap: 23px;
+}
+.insert-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  color: #8d96a4;
+  font-size: 11px;
+}
+.insert-cell:hover:not(:disabled),
+.insert-cell:focus-visible {
+  color: #216b60;
+  background: #eaf0ee;
+  border-radius: 6px;
 }
 .cell-card {
   border: 1px solid #dce2ea;
@@ -806,8 +820,11 @@ tbody tr:hover {
   .cell-name {
     width: 110px;
   }
-  .cell-actions .icon-button {
-    display: none;
+  .cell-header {
+    flex-wrap: wrap;
+  }
+  .cell-actions {
+    margin-left: auto;
   }
   .shortcut-hint {
     display: none;
