@@ -53,7 +53,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
   cargoRoot = "src-tauri";
   buildAndTestSubdir = finalAttrs.cargoRoot;
   cargoLock.lockFile = ../src-tauri/Cargo.lock;
-  cargoBuildFeatures = [ "custom-protocol" ];
+  buildFeatures = [ "custom-protocol" ];
   cargoBuildFlags = [
     "--bin"
     "jupsql"
