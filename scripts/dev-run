@@ -15,12 +15,18 @@ runtime_settings="$(
     for name in GIO_MODULE_DIR __EGL_VENDOR_LIBRARY_FILENAMES GBM_BACKENDS_PATH LIBGL_DRIVERS_PATH; do
       printf "%s=%s\n" "$name" "${!name}"
     done
+    if [[ -n "${JUPSQL_GSETTINGS_DATA_DIRS:-}" ]]; then
+      printf "XDG_DATA_DIRS=%s\n" "$JUPSQL_GSETTINGS_DATA_DIRS"
+    fi
   '
 )"
 
 runtime_environment=()
 while IFS= read -r setting; do
   case "$setting" in
+    XDG_DATA_DIRS=*)
+      runtime_environment+=("$setting:${XDG_DATA_DIRS:-/usr/local/share/:/usr/share/}")
+      ;;
     GIO_MODULE_DIR=*|__EGL_VENDOR_LIBRARY_FILENAMES=*|GBM_BACKENDS_PATH=*|LIBGL_DRIVERS_PATH=*)
       runtime_environment+=("$setting")
       ;;

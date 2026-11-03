@@ -92,6 +92,13 @@
                 librsvg
               ];
             GIO_MODULE_DIR = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux "${pkgs.glib-networking}/lib/gio/modules";
+            # Match the packaged GTK wrapper so desktop font and DPI settings are available.
+            JUPSQL_GSETTINGS_DATA_DIRS = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux (
+              pkgs.lib.concatMapStringsSep ":" (pkg: "${pkg}/share/gsettings-schemas/${pkg.name}") [
+                pkgs.gsettings-desktop-schemas
+                pkgs.gtk3
+              ]
+            );
             # Keep Mesa and WebKit on the same libc. Host GPU libraries may use a newer libc.
             __EGL_VENDOR_LIBRARY_FILENAMES = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux "${pkgs.mesa}/share/glvnd/egl_vendor.d/50_mesa.json";
             GBM_BACKENDS_PATH = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux "${pkgs.mesa}/lib/gbm";

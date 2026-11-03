@@ -40,7 +40,7 @@ pnpm dev
 
 Or run `direnv allow` once and use the same pnpm commands. The flake supplies Node 24, pnpm, Rust, PostgreSQL, and Linux WebKit/GTK dependencies. It selects a matching Mesa runtime so the app does not load an incompatible host graphics library.
 
-On Warren's workstation, `dev jupsql` uses `scripts/dev-run` to install locked dependencies and build a standalone debug executable in this checkout, then launches it from the caller's directory and exported environment. It retains the caller's database variables and `JUPSQL_DATA_DIR` (including when unset), adding only the matching native runtime settings. Each launch invokes the incremental build; this mode does not run a development server or watch for edits. The installed `jupsql` command is unchanged. The same launcher can be invoked directly with `bash /path/to/jupsql/scripts/dev-run`.
+On Warren's workstation, `dev jupsql` uses `scripts/dev-run` to install locked dependencies and build a standalone debug executable in this checkout, then launches it from the caller's directory and exported environment. It retains the caller's database variables and `JUPSQL_DATA_DIR` (including when unset), adding only the matching native runtime settings. GTK schema directories are prepended to the caller's `XDG_DATA_DIRS` so desktop font settings and text scaling match the installed package. Each launch invokes the incremental build; this mode does not run a development server or watch for edits. The installed `jupsql` command is unchanged. The same launcher can be invoked directly with `bash /path/to/jupsql/scripts/dev-run`.
 
 JupSQL automatically connects using a nonempty `DATABASE_URL` first. If it is absent or empty, it uses the individual PG variables with these defaults:
 
