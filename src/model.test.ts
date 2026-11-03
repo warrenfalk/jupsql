@@ -29,6 +29,8 @@ describe('notebook state', () => {
           cellId: 'a',
           compiledSql: 'SELECT 1',
           rows: [['1']],
+          returnedRows: 1,
+          rowCountLimited: false,
           columns: ['n'],
           affectedRows: 1,
           truncated: false,

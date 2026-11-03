@@ -29,8 +29,9 @@ export function Results({ result, stale, name }: { result: DisplayResult; stale:
           <strong>{result.error ? 'Query failed' : stale ? 'Stale result' : 'Result'}</strong>
           {!result.error && (
             <span>
-              {result.rows.length.toLocaleString()} row{result.rows.length === 1 ? '' : 's'}
-              {result.truncated ? ' · preview limited' : ''}
+              {result.rowCountLimited ? '> ' : ''}
+              {result.returnedRows?.toLocaleString()} row{result.returnedRows === 1 ? '' : 's'} returned
+              {result.truncated ? ` · ${result.rows.length.toLocaleString()} rows in preview` : ''}
             </span>
           )}
         </div>
@@ -96,14 +97,21 @@ export function Results({ result, stale, name }: { result: DisplayResult; stale:
                 ))}
               </tbody>
             </table>
-            {result.rows.length === 0 && <div className="empty-result">The query returned no rows.</div>}
+            {result.rows.length === 0 && (
+              <div className="empty-result">
+                {result.returnedRows === 0
+                  ? 'The query returned no rows.'
+                  : 'No rows fit within the 2 MB preview limit.'}
+              </div>
+            )}
           </div>
           {(pages > 1 || result.truncated) && (
             <div className="pagination">
               <span>
-                {result.truncated
-                  ? 'Showing a bounded preview. References use the full query.'
-                  : `${result.rows.length} rows`}
+                {result.rows.length > 0
+                  ? `Showing ${current * 50 + 1}–${Math.min((current + 1) * 50, result.rows.length)} of ${result.rows.length.toLocaleString()} preview rows.`
+                  : 'Preview limited.'}
+                {result.truncated || result.rowCountLimited ? ' References use the full query.' : ''}
               </span>
               {pages > 1 && (
                 <div className="flex items-center gap-3">

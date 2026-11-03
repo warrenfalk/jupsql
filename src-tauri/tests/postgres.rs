@@ -206,7 +206,133 @@ async fn real_postgres_execution_contract() {
     .unwrap();
     assert_eq!(result.results[0].rows.len(), 500);
     assert!(result.results[0].truncated);
+    assert_eq!(result.results[0].returned_rows, Some(900));
+    assert!(!result.results[0].row_count_limited);
     assert_eq!(result.results[1].rows[0][0].as_deref(), Some("900"));
+
+    // Count the returned result, independently of the retained display preview.
+    for count in [0, 1, 500, 501, 49_999, 50_000, 50_001, 75_000] {
+        let result = database::execute(
+            &database,
+            &storage,
+            RunRequest {
+                notebook: notebook(vec![cell(
+                    "numbers",
+                    &format!("SELECT generate_series(1, {count}) AS n"),
+                    CellKind::Query,
+                )]),
+                cell_id: Some("numbers".into()),
+                bulk: false,
+            },
+            |_| {},
+        )
+        .await
+        .unwrap();
+        let result = &result.results[0];
+        assert!(result.error.is_none(), "{:?}", result.error);
+        assert_eq!(result.returned_rows, Some(count.min(50_000)));
+        assert_eq!(result.row_count_limited, count > 50_000);
+        assert_eq!(result.rows.len() as u64, count.min(500));
+        assert_eq!(result.truncated, count > 500);
+    }
+    for (sql, count, preview, limited) in [
+        (
+            "SELECT generate_series(1, 75000) LIMIT 42",
+            Some(42),
+            42,
+            false,
+        ),
+        (
+            "SELECT repeat('x', 600000) FROM generate_series(1, 10)",
+            Some(10),
+            3,
+            false,
+        ),
+        (
+            "SELECT repeat('x', 2000001) FROM generate_series(1, 2)",
+            Some(2),
+            0,
+            false,
+        ),
+        (
+            "SELECT CASE WHEN n = 900 THEN 1 / (n - 900) ELSE n END FROM generate_series(1, 1000) AS n",
+            None,
+            0,
+            false,
+        ),
+    ] {
+        let result = database::execute(
+            &database,
+            &storage,
+            RunRequest {
+                notebook: notebook(vec![cell("counted", sql, CellKind::Query)]),
+                cell_id: Some("counted".into()),
+                bulk: false,
+            },
+            |_| {},
+        )
+        .await
+        .unwrap();
+        let result = &result.results[0];
+        assert_eq!(result.returned_rows, count);
+        assert_eq!(result.row_count_limited, limited);
+        if count.is_some() {
+            assert!(result.error.is_none(), "{:?}", result.error);
+            assert_eq!(result.rows.len(), preview);
+        } else {
+            assert!(result.error.is_some());
+        }
+    }
+    let result = database::execute(
+        &database,
+        &storage,
+        RunRequest {
+            notebook: notebook(vec![
+                cell(
+                    "many",
+                    "SELECT generate_series(1, 75000) AS n",
+                    CellKind::Query,
+                ),
+                cell(
+                    "full_count",
+                    "SELECT count(*) FROM notebook.many",
+                    CellKind::Query,
+                ),
+            ]),
+            cell_id: None,
+            bulk: true,
+        },
+        |_| {},
+    )
+    .await
+    .unwrap();
+    assert!(result.results[0].row_count_limited);
+    assert_eq!(result.results[1].rows[0][0].as_deref(), Some("75000"));
+
+    setup
+        .batch_execute("CREATE TABLE returned_rows (n int)")
+        .await
+        .unwrap();
+    let result = database::execute(
+        &database,
+        &storage,
+        RunRequest {
+            notebook: notebook(vec![cell(
+                "insert_rows",
+                "INSERT INTO returned_rows SELECT generate_series(1, 600) RETURNING n",
+                CellKind::Mutation,
+            )]),
+            cell_id: Some("insert_rows".into()),
+            bulk: false,
+        },
+        |_| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.results[0].returned_rows, Some(600));
+    assert_eq!(result.results[0].affected_rows, 600);
+    assert_eq!(result.results[0].rows.len(), 500);
+    assert!(result.results[0].truncated);
 
     // Insert on a second connection after the batch has acquired its snapshot.
     let started = Arc::new(AtomicBool::new(false));
@@ -299,12 +425,15 @@ async fn real_postgres_execution_contract() {
     let (result, ()) = tokio::join!(execution, cancellation);
     let result = result.unwrap();
     assert!(result.cancelled);
+    assert_eq!(result.results[0].returned_rows, None);
     assert!(result.results[0].elapsed_ms < 3000);
     assert!(database.active.lock().unwrap().is_none());
 
     let log = std::fs::read_to_string(&storage.log_path).unwrap();
     assert!(log.contains("compiledSql"));
     assert!(log.contains("snapshot_acquired"));
+    assert!(log.contains("\"returnedRows\":50000"));
+    assert!(log.contains("\"rowCountLimited\":true"));
     assert!(!log.contains("never-log-this-password"));
     assert!(!log.contains("\"rows\":"));
     std::fs::remove_dir_all(directory).unwrap();

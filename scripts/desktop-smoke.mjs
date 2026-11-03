@@ -629,6 +629,51 @@ try {
       console.log(
         'Native notebook history passed: resume, concurrent empty notebook, latest-opened selection, and separate database history.',
       );
+      // Real execution and result labels distinguish the returned count from the preview.
+      await click('New notebook');
+      await until(
+        `return document.querySelector('[aria-label="Notebook title"]').value === 'Untitled notebook' && document.querySelectorAll('.cell-card').length === 0 && !!document.querySelector('.connection-dot.connected')`,
+      );
+      const countLabel = await evaluate('return (50000).toLocaleString()');
+      for (const [sql, label, preview] of [
+        ['SELECT generate_series(1, 50000) AS n', `${countLabel} rows returned · 500 rows in preview`, 50],
+        ['SELECT generate_series(1, 50001) AS n', `> ${countLabel} rows returned · 500 rows in preview`, 50],
+        ['SELECT generate_series(1, 75000) AS n LIMIT 42', '42 rows returned', 42],
+        ["SELECT repeat('x', 2000001) FROM generate_series(1, 2)", '2 rows returned · 0 rows in preview', 0],
+        ['SELECT 1 WHERE false', '0 rows returned', 0],
+      ]) {
+        const counted = { ...fixture, cells: [{ ...fixture.cells[0], sql }] };
+        await evaluate(
+          `const input = document.querySelector('[aria-label="Notebook file"]');
+           const transfer = new DataTransfer();
+           transfer.items.add(new File([JSON.stringify(arguments[0])], 'counted.jupsql.json', {type: 'application/json'}));
+           input.files = transfer.files;
+           input.dispatchEvent(new Event('change', {bubbles:true}));`,
+          [counted],
+        );
+        await until(
+          `return document.querySelectorAll('.cell-card').length === 1 && document.querySelector('.cm-content').innerText.trim() === ${JSON.stringify(sql)} && !document.querySelector('.run-button').disabled`,
+        );
+        await evaluate(`document.querySelector('.run-button').click()`);
+        await until(
+          `return !document.querySelector('.run-progress') && document.querySelector('.result-bar')?.textContent.includes(${JSON.stringify(label)})`,
+        );
+        assert.equal(await evaluate(`return document.querySelectorAll('.results tbody tr').length`), preview);
+        if (preview === 0) {
+          assert.ok(
+            await evaluate(
+              `return document.querySelector('.empty-result').textContent.includes(${JSON.stringify(sql.includes('repeat') ? 'No rows fit' : 'returned no rows')})`,
+            ),
+          );
+        }
+        if (sql.includes('50001')) {
+          await writeFile(
+            '.cache/validation/native-row-counts.png',
+            Buffer.from(await request(`/session/${session}/screenshot`), 'base64'),
+          );
+        }
+      }
+      console.log('Native row counts passed: exact 50,000, > 50,000, SQL LIMIT, byte-capped preview, and zero rows.');
     } finally {
       await closePeer().catch(() => {});
     }

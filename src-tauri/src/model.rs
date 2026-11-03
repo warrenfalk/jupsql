@@ -60,6 +60,8 @@ pub struct CellResult {
     pub compiled_sql: String,
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Option<String>>>,
+    pub returned_rows: Option<u64>,
+    pub row_count_limited: bool,
     pub affected_rows: u64,
     pub truncated: bool,
     pub elapsed_ms: u128,

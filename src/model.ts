@@ -38,6 +38,8 @@ export type CellResult = {
   compiledSql: string;
   columns: string[];
   rows: (string | null)[][];
+  returnedRows: number | null;
+  rowCountLimited: boolean;
   affectedRows: number;
   truncated: boolean;
   elapsedMs: number;

@@ -16,7 +16,8 @@ use std::{
 };
 use tokio_postgres::{Client, Config, SimpleQueryMessage, config::SslMode};
 
-pub const ROW_LIMIT: usize = 500;
+const PREVIEW_ROW_LIMIT: usize = 500;
+const RETURNED_ROW_LIMIT: u64 = 50_000;
 const RESULT_BYTES_LIMIT: usize = 2_000_000;
 
 pub struct ActiveRun {
@@ -262,6 +263,8 @@ async fn execute_inner(
             compiled_sql: String::new(),
             columns: vec![],
             rows: vec![],
+            returned_rows: None,
+            row_count_limited: false,
             affected_rows: 0,
             truncated: false,
             elapsed_ms: 0,
@@ -276,11 +279,12 @@ async fn execute_inner(
                     .batch_execute("SAVEPOINT jupsql_cell")
                     .await
                     .map_err(|e| error_message(&e))?;
-                // Limit only the displayed query, never a referenced definition.
+                // One extra row distinguishes an exact count from a lower bound.
+                // Limit only this execution, never a referenced definition.
                 let executed_sql = if readonly {
                     format!(
-                        "SELECT * FROM ({sql}) AS jupsql_preview LIMIT {}",
-                        ROW_LIMIT + 1
+                        "SELECT * FROM ({sql}) AS jupsql_result LIMIT {}",
+                        RETURNED_ROW_LIMIT + 1
                     )
                 } else {
                     sql
@@ -305,7 +309,7 @@ async fn execute_inner(
             }
         }
         result.elapsed_ms = started.elapsed().as_millis();
-        storage.record("cell_finished", json!({ "runId": run_id, "cellId": id, "elapsedMs": result.elapsed_ms, "displayedRows": result.rows.len(), "affectedRows": result.affected_rows, "truncated": result.truncated, "error": result.error }))?;
+        storage.record("cell_finished", json!({ "runId": run_id, "cellId": id, "elapsedMs": result.elapsed_ms, "returnedRows": result.returned_rows, "rowCountLimited": result.row_count_limited, "displayedRows": result.rows.len(), "affectedRows": result.affected_rows, "truncated": result.truncated, "error": result.error }))?;
         results.push(result);
     }
     let was_cancelled = cancelled.load(Ordering::SeqCst);
@@ -334,17 +338,22 @@ async fn collect(client: &Client, sql: &str, result: &mut CellResult) -> Result<
         .map_err(|e| error_message(&e))?;
     futures_util::pin_mut!(stream);
     let mut bytes = 0;
+    let mut returned_rows = 0;
     while let Some(message) = stream.try_next().await.map_err(|e| error_message(&e))? {
         match message {
             SimpleQueryMessage::RowDescription(columns) => {
                 result.columns = columns.iter().map(|c| c.name().to_string()).collect()
             }
             SimpleQueryMessage::Row(row) => {
+                returned_rows += 1;
+                if result.truncated {
+                    continue;
+                }
                 let values: Vec<_> = (0..row.len())
                     .map(|i| row.get(i).map(str::to_string))
                     .collect();
                 bytes += values.iter().flatten().map(String::len).sum::<usize>();
-                if result.rows.len() < ROW_LIMIT && bytes <= RESULT_BYTES_LIMIT {
+                if result.rows.len() < PREVIEW_ROW_LIMIT && bytes <= RESULT_BYTES_LIMIT {
                     result.rows.push(values);
                 } else {
                     result.truncated = true;
@@ -354,5 +363,8 @@ async fn collect(client: &Client, sql: &str, result: &mut CellResult) -> Result<
             _ => {}
         }
     }
+    // Publish a count only after successful completion, never for a partial stream.
+    result.returned_rows = Some(returned_rows.min(RETURNED_ROW_LIMIT));
+    result.row_count_limited = returned_rows > RETURNED_ROW_LIMIT;
     Ok(())
 }
