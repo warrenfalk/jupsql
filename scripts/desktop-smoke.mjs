@@ -146,6 +146,46 @@ try {
   await until(`return document.activeElement?.getAttribute('aria-label') === 'query_2 SQL'`);
   assert.equal(await evaluate(`return document.querySelector('[aria-label="query_2 SQL"]').innerText.trim()`), '');
   assert.equal(await evaluate(`return document.querySelector('[aria-label="query_2 notes"]').value`), '');
+  const editorText = `document.querySelector('[aria-label="query_2 SQL"]').textContent`;
+  const editorActions = (actions) =>
+    request(`/session/${session}/actions`, 'POST', {
+      actions: [{ type: 'key', id: 'keyboard', actions }],
+    });
+  const key = (value) => [
+    { type: 'keyDown', value },
+    { type: 'keyUp', value },
+  ];
+  const clearEditor = () =>
+    editorActions([
+      { type: 'keyDown', value: '\uE009' },
+      ...key('a'),
+      { type: 'keyUp', value: '\uE009' },
+      ...key('\uE003'),
+    ]);
+  for (const acceptKey of ['\uE004', '\uE007']) {
+    const prefix = 'SELECT * FROM notebook.';
+    await editorActions([...prefix].flatMap(key));
+    await until(
+      `return !!document.querySelector('.cm-tooltip-autocomplete [aria-selected="true"] .cm-completionLabel')`,
+    );
+    const selected = await evaluate(
+      `return document.querySelector('.cm-tooltip-autocomplete [aria-selected="true"] .cm-completionLabel').textContent`,
+    );
+    assert.ok(['query_1', 'query_2'].includes(selected));
+    // Respect CodeMirror's short interaction delay after opening suggestions.
+    await sleep(100);
+    await editorActions(key(acceptKey));
+    await until(`return ${editorText} === ${JSON.stringify(prefix + selected)}`);
+    await clearEditor();
+    await until(`return ${editorText}.trim() === ''`);
+  }
+  await until(`return !document.querySelector('.cm-tooltip-autocomplete')`);
+  await editorActions(key('\uE004'));
+  assert.ok(await evaluate(`return ${editorText}.length > 0 && ${editorText}.trim() === ''`));
+  await clearEditor();
+  console.log(
+    'Native autocomplete passed: Tab and Enter accept notebook references; Tab still indents without suggestions.',
+  );
   await request(`/session/${session}/actions`, 'POST', {
     actions: [
       {

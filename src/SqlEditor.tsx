@@ -1,3 +1,4 @@
+import { acceptCompletion } from '@codemirror/autocomplete';
 import { PostgreSQL, sql } from '@codemirror/lang-sql';
 import { Prec } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
@@ -35,13 +36,18 @@ export function SqlEditor({
   names: string[];
   label: string;
 }) {
+  const language = useMemo(
+    () => sql({ dialect: PostgreSQL, schema: { notebook: Object.fromEntries(names.map((name) => [name, []])) } }),
+    [names],
+  );
   const extensions = useMemo(
     () => [
-      sql({ dialect: PostgreSQL, schema: { notebook: Object.fromEntries(names.map((name) => [name, []])) } }),
+      language,
       editorTheme,
-      // Override the default Mod-Enter binding, which inserts a blank line.
+      // Handle completion before Tab indentation and running before Mod-Enter's blank line.
       Prec.high(
         keymap.of([
+          { key: 'Tab', run: acceptCompletion },
           {
             key: 'Mod-Enter',
             run: () => {
@@ -60,7 +66,7 @@ export function SqlEditor({
       ),
       EditorView.contentAttributes.of({ 'aria-label': label }),
     ],
-    [names, onRun, onRefresh, label],
+    [language, onRun, onRefresh, label],
   );
   return (
     <CodeMirror

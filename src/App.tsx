@@ -15,7 +15,7 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import * as bridge from './bridge';
 import { CellCard } from './CellCard';
 import { ConnectionDialog } from './ConnectionDialog';
@@ -39,7 +39,7 @@ function NotebookWorkspace({ initial, onOpened }: { initial: Bootstrap; onOpened
   const [selected, setSelected] = useState<string | null>(null);
   const [deleted, setDeleted] = useState<{ cell: Cell; index: number } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const names = state.notebook.cells.map((cell) => cell.name);
+  const names = useMemo(() => state.notebook.cells.map((cell) => cell.name), [state.notebook.cells]);
   const canRun =
     bridge.desktop && !!state.connection && !state.busy && !state.switching && !state.analyzing && !connecting;
   const notebooks = workspace.notebooks.some((notebook) => notebook.id === initial.notebookId)
